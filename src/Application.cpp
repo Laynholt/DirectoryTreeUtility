@@ -33,7 +33,8 @@ Application::Application()
     , m_hScrollV(nullptr)
     , m_hScrollH(nullptr)
     , m_currentDepth(1)
-    , m_isMinimized(false) {
+    , m_isMinimized(false)
+    , m_isDefaultDepthValue(true) {
 }
 
 Application::~Application() {
@@ -57,7 +58,7 @@ bool Application::Initialize(HINSTANCE hInstance) {
 
     WNDCLASSEX wcex = {};
     wcex.cbSize = sizeof(WNDCLASSEX);
-    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     wcex.lpfnWndProc = WindowProc;
     wcex.cbClsExtra = 0;
     wcex.cbWndExtra = 0;
@@ -74,13 +75,21 @@ bool Application::Initialize(HINSTANCE hInstance) {
         return false;
     }
 
+    // Get screen dimensions for centering
+    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+    int windowWidth = 800;
+    int windowHeight = 600;
+    int x = (screenWidth - windowWidth) / 2;
+    int y = (screenHeight - windowHeight) / 2;
+
     m_hWnd = CreateWindowEx(
         0,
         WINDOW_CLASS,
         WINDOW_TITLE,
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        800, 600,
+        x, y,
+        windowWidth, windowHeight,
         nullptr,
         nullptr,
         hInstance,
@@ -113,8 +122,8 @@ bool Application::Initialize(HINSTANCE hInstance) {
 
     UpdateCurrentPath();
 
-    ShowWindow(true);
-    UpdateWindow(m_hWnd);
+    // Start timer for dynamic path updating (check every 2 seconds)
+    SetTimer(m_hWnd, PATH_UPDATE_TIMER_ID, 2000, nullptr);
 
     return true;
 }
@@ -153,13 +162,18 @@ void Application::CreateControls() {
     m_hTreeCanvas = CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                   WS_VISIBLE | WS_CHILD | WS_VSCROLL | WS_HSCROLL |
                                   ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL,
-                                  10, 115, 760, 400, m_hWnd, (HMENU)ID_TREE_CANVAS, m_hInstance, nullptr);
+                                  10, 115, 760, 370, m_hWnd, (HMENU)ID_TREE_CANVAS, m_hInstance, nullptr);
+
+    m_hStatusLabel = CreateWindowEx(0, L"STATIC", L"Готово",
+                                   WS_VISIBLE | WS_CHILD,
+                                   10, 495, 760, 20, m_hWnd, nullptr, m_hInstance, nullptr);
 
     SendMessage(m_hDepthEdit, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(FALSE, 0));
     SendMessage(m_hPathEdit, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(FALSE, 0));
     SendMessage(m_hGenerateBtn, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(FALSE, 0));
     SendMessage(m_hCopyBtn, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(FALSE, 0));
     SendMessage(m_hSaveBtn, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(FALSE, 0));
+    SendMessage(m_hStatusLabel, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(FALSE, 0));
 
     HFONT hMonoFont = CreateFont(
         14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
@@ -172,6 +186,85 @@ void Application::CreateControls() {
 int Application::Run() {
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0)) {
+        // Check if this is a key message for our window or its children
+        if ((msg.message == WM_KEYDOWN || msg.message == WM_CHAR) && 
+            (msg.hwnd == m_hWnd || IsChild(m_hWnd, msg.hwnd))) {
+            
+            // Handle special keys globally
+            if (msg.message == WM_KEYDOWN) {
+                if (msg.wParam == VK_ESCAPE) {
+                    SetFocus(m_hWnd);
+                    continue;
+                }
+                else if (msg.wParam == VK_RETURN) {
+                    GenerateTree();
+                    ShowStatusMessage(L"Дерево директорий построено");
+                    continue;
+                }
+                else if (msg.wParam == 'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                    CopyToClipboard();
+                    continue;
+                }
+                else if (msg.wParam == 'S' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                    SaveToFile();
+                    continue;
+                }
+                else if (msg.wParam >= VK_LEFT && msg.wParam <= VK_DOWN) {
+                    // Check if depth edit has focus - use arrows for value change
+                    if (msg.hwnd == m_hDepthEdit || GetFocus() == m_hDepthEdit) {
+                        switch (msg.wParam) {
+                        case VK_UP:
+                            HandleDepthIncrement();
+                            break;
+                        case VK_DOWN:
+                            HandleDepthDecrement();
+                            break;
+                        // Left/Right arrows work normally for cursor movement in edit control
+                        }
+                        // Don't continue here - let the edit control handle left/right arrows normally
+                        if (msg.wParam == VK_UP || msg.wParam == VK_DOWN) {
+                            continue;
+                        }
+                    } else {
+                        // Arrow keys for scrolling canvas when not in depth edit
+                        switch (msg.wParam) {
+                        case VK_UP:
+                            SendMessage(m_hTreeCanvas, WM_VSCROLL, SB_LINEUP, 0);
+                            break;
+                        case VK_DOWN:
+                            SendMessage(m_hTreeCanvas, WM_VSCROLL, SB_LINEDOWN, 0);
+                            break;
+                        case VK_LEFT:
+                            SendMessage(m_hTreeCanvas, WM_HSCROLL, SB_LINELEFT, 0);
+                            break;
+                        case VK_RIGHT:
+                            SendMessage(m_hTreeCanvas, WM_HSCROLL, SB_LINERIGHT, 0);
+                            break;
+                        }
+                        continue;
+                    }
+                }
+                else if (msg.wParam >= '0' && msg.wParam <= '9' && msg.hwnd != m_hDepthEdit) {
+                    // Number input - redirect to depth edit
+                    SetFocus(m_hDepthEdit);
+                    HandleNumberInput((wchar_t)msg.wParam);
+                    continue;
+                }
+                else if (msg.wParam == VK_BACK && msg.hwnd != m_hDepthEdit) {
+                    // Backspace - redirect to depth edit
+                    SetFocus(m_hDepthEdit);
+                    HandleBackspace();
+                    continue;
+                }
+                else if (msg.wParam == VK_OEM_MINUS && msg.hwnd != m_hDepthEdit) {
+                    // Minus key - redirect to depth edit
+                    SetFocus(m_hDepthEdit);
+                    HandleMinusKey();
+                    continue;
+                }
+            }
+        }
+        
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
@@ -210,10 +303,17 @@ void Application::ShowWindow(bool show) {
 
 void Application::ToggleVisibility() {
     if (m_isMinimized || !IsWindowVisible(m_hWnd)) {
+        // Window is hidden or minimized - show it
         ShowWindow(true);
-    } else {
+    } else if (GetForegroundWindow() == m_hWnd) {
+        // Window is visible and active - hide it
         ShowWindow(false);
         m_systemTray->AddToTray();
+    } else {
+        // Window is visible but not active - bring to front
+        SetForegroundWindow(m_hWnd);
+        BringWindowToTop(m_hWnd);
+        SetActiveWindow(m_hWnd);
     }
 }
 
@@ -239,6 +339,10 @@ LRESULT CALLBACK Application::WindowProc(HWND hWnd, UINT message, WPARAM wParam,
 LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_COMMAND:
+        if (HIWORD(wParam) == EN_SETFOCUS && (HWND)lParam == m_hDepthEdit) {
+            // When depth edit gets focus, select all text for easy replacement
+            SendMessage(m_hDepthEdit, EM_SETSEL, 0, -1);
+        }
         OnCommand(LOWORD(wParam));
         break;
 
@@ -252,6 +356,13 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 
     case WM_KEYDOWN:
         OnKeyDown(wParam, lParam);
+        break;
+        
+    case WM_CHAR:
+        // Handle character input for depth edit when any control has focus
+        if (wParam >= L'0' && wParam <= L'9') {
+            OnKeyDown(wParam, lParam);
+        }
         break;
 
     case WM_GETMINMAXINFO:
@@ -267,7 +378,37 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         m_systemTray->AddToTray();
         return 0;
 
+    case WM_TIMER:
+        if (wParam == STATUS_TIMER_ID) {
+            SetWindowText(m_hStatusLabel, L"Готово");
+            KillTimer(m_hWnd, STATUS_TIMER_ID);
+        }
+        else if (wParam == PATH_UPDATE_TIMER_ID) {
+            std::wstring currentPath = FileExplorerIntegration::GetActiveExplorerPath();
+            if (currentPath.empty()) {
+                wchar_t buffer[MAX_PATH];
+                GetCurrentDirectory(MAX_PATH, buffer);
+                currentPath = buffer;
+            }
+            
+            if (currentPath != m_lastKnownPath) {
+                m_lastKnownPath = currentPath;
+                SetWindowText(m_hPathEdit, currentPath.c_str());
+            }
+        }
+        break;
+
+    case WM_NCCALCSIZE:
+        // Let Windows handle the default calculation
+        return DefWindowProc(m_hWnd, message, wParam, lParam);
+        
+    case WM_NCACTIVATE:
+        // Ensure title bar is properly activated/deactivated
+        return DefWindowProc(m_hWnd, message, wParam, lParam);
+
     case WM_DESTROY:
+        KillTimer(m_hWnd, STATUS_TIMER_ID);
+        KillTimer(m_hWnd, PATH_UPDATE_TIMER_ID);
         PostQuitMessage(0);
         break;
 
@@ -280,7 +421,8 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 void Application::OnResize(int width, int height) {
     if (width > 0 && height > 0) {
         MoveWindow(m_hPathEdit, 140, 38, width - 160, 24, TRUE);
-        MoveWindow(m_hTreeCanvas, 10, 115, width - 40, height - 135, TRUE);
+        MoveWindow(m_hTreeCanvas, 10, 115, width - 40, height - 165, TRUE);
+        MoveWindow(m_hStatusLabel, 10, height - 45, width - 40, 20, TRUE);
     }
 }
 
@@ -306,12 +448,11 @@ void Application::OnCommand(int commandId) {
 
 void Application::OnKeyDown(WPARAM key, LPARAM) {
     HWND hFocused = GetFocus();
-    
-    if (hFocused == m_hDepthEdit) {
-        return;
-    }
 
     switch (key) {
+    case VK_ESCAPE:
+        SetFocus(m_hWnd);
+        break;
     case VK_RETURN:
         GenerateTree();
         break;
@@ -326,8 +467,12 @@ void Application::OnKeyDown(WPARAM key, LPARAM) {
         }
         break;
     case VK_BACK:
+        if (hFocused != m_hDepthEdit) {
+            SetFocus(m_hDepthEdit);
+        }
         if (GetKeyState(VK_SHIFT) & 0x8000) {
             SetWindowText(m_hDepthEdit, L"1");
+            m_isDefaultDepthValue = true;
         } else {
             wchar_t buffer[32];
             GetWindowText(m_hDepthEdit, buffer, 32);
@@ -336,6 +481,9 @@ void Application::OnKeyDown(WPARAM key, LPARAM) {
                 buffer[len - 1] = L'\0';
                 if (wcslen(buffer) == 0) {
                     wcscpy_s(buffer, L"1");
+                    m_isDefaultDepthValue = true;
+                } else {
+                    m_isDefaultDepthValue = false;
                 }
                 SetWindowText(m_hDepthEdit, buffer);
             }
@@ -346,20 +494,45 @@ void Application::OnKeyDown(WPARAM key, LPARAM) {
             wchar_t buffer[32];
             GetWindowText(m_hDepthEdit, buffer, 32);
             int value = _wtoi(buffer);
-            swprintf_s(buffer, L"%d", -value);
+            swprintf_s(buffer, 32, L"%d", -value);
             SetWindowText(m_hDepthEdit, buffer);
+            m_isDefaultDepthValue = false;
         }
         break;
+    case VK_UP:
+        SendMessage(m_hTreeCanvas, WM_VSCROLL, SB_LINEUP, 0);
+        break;
+    case VK_DOWN:
+        SendMessage(m_hTreeCanvas, WM_VSCROLL, SB_LINEDOWN, 0);
+        break;
+    case VK_LEFT:
+        SendMessage(m_hTreeCanvas, WM_HSCROLL, SB_LINELEFT, 0);
+        break;
+    case VK_RIGHT:
+        SendMessage(m_hTreeCanvas, WM_HSCROLL, SB_LINERIGHT, 0);
+        break;
     default:
-        if (key >= '0' && key <= '9') {
+        if (key >= '0' && key <= '9' && hFocused != m_hDepthEdit) {
+            // Only handle number input if depth edit is not focused
+            SetFocus(m_hDepthEdit);
             wchar_t buffer[32];
             GetWindowText(m_hDepthEdit, buffer, 32);
-            int currentValue = _wtoi(buffer);
-            if (currentValue == 0 && buffer[0] != L'-') {
+            
+            // If it's the default value "1" and user types a different digit, replace it
+            if (m_isDefaultDepthValue && wcscmp(buffer, L"1") == 0 && key != '1') {
                 swprintf_s(buffer, 32, L"%c", (wchar_t)key);
-            } else {
+                m_isDefaultDepthValue = false;
+            }
+            // If it's empty or zero, just set the digit
+            else if (wcslen(buffer) == 0 || (wcslen(buffer) == 1 && buffer[0] == L'0')) {
+                swprintf_s(buffer, 32, L"%c", (wchar_t)key);
+                m_isDefaultDepthValue = false;
+            }
+            // Otherwise append the digit
+            else {
                 wchar_t newChar[2] = { (wchar_t)key, L'\0' };
                 wcscat_s(buffer, 32, newChar);
+                m_isDefaultDepthValue = false;
             }
             SetWindowText(m_hDepthEdit, buffer);
         }
@@ -381,6 +554,7 @@ void Application::GenerateTree() {
 
     m_treeContent = m_treeBuilder->BuildTree(currentPath, m_currentDepth);
     SetWindowText(m_hTreeCanvas, m_treeContent.c_str());
+    ShowStatusMessage(L"Дерево директорий построено");
 }
 
 void Application::CopyToClipboard() {
@@ -400,6 +574,7 @@ void Application::CopyToClipboard() {
             }
         }
         CloseClipboard();
+        ShowStatusMessage(L"Скопировано в буфер обмена");
     }
 }
 
@@ -433,6 +608,7 @@ void Application::SaveToFile() {
             }
             WriteFile(hFile, utf8Content.c_str(), (DWORD)utf8Content.length(), &bytesWritten, nullptr);
             CloseHandle(hFile);
+            ShowStatusMessage(L"Файл сохранен");
         }
     }
 }
@@ -444,5 +620,108 @@ void Application::UpdateCurrentPath() {
         GetCurrentDirectory(MAX_PATH, buffer);
         currentPath = buffer;
     }
+    m_lastKnownPath = currentPath;
     SetWindowText(m_hPathEdit, currentPath.c_str());
+}
+
+void Application::ShowStatusMessage(const std::wstring& message) {
+    SetWindowText(m_hStatusLabel, message.c_str());
+    SetTimer(m_hWnd, STATUS_TIMER_ID, 3000, nullptr); // Hide after 3 seconds
+}
+
+void Application::HandleNumberInput(wchar_t digit) {
+    wchar_t buffer[32];
+    GetWindowText(m_hDepthEdit, buffer, 32);
+    
+    // If it's the default value "1" and user types a different digit, replace it
+    if (m_isDefaultDepthValue && wcscmp(buffer, L"1") == 0 && digit != '1') {
+        swprintf_s(buffer, 32, L"%c", digit);
+        m_isDefaultDepthValue = false;
+    }
+    // If it's empty or zero, just set the digit
+    else if (wcslen(buffer) == 0 || (wcslen(buffer) == 1 && buffer[0] == L'0')) {
+        swprintf_s(buffer, 32, L"%c", digit);
+        m_isDefaultDepthValue = false;
+    }
+    // Otherwise append the digit
+    else {
+        wchar_t newChar[2] = { digit, L'\0' };
+        wcscat_s(buffer, 32, newChar);
+        m_isDefaultDepthValue = false;
+    }
+    SetWindowText(m_hDepthEdit, buffer);
+}
+
+void Application::HandleBackspace() {
+    if (GetKeyState(VK_SHIFT) & 0x8000) {
+        // Shift+Backspace: replace entire text with "1"
+        SetWindowText(m_hDepthEdit, L"1");
+        m_isDefaultDepthValue = true;
+        // Select all text so user can see what happened
+        SendMessage(m_hDepthEdit, EM_SETSEL, 0, -1);
+    } else {
+        // Regular Backspace: delete character before cursor
+        wchar_t buffer[32];
+        GetWindowText(m_hDepthEdit, buffer, 32);
+        int len = static_cast<int>(wcslen(buffer));
+        if (len > 0) {
+            buffer[len - 1] = L'\0';
+            if (wcslen(buffer) == 0) {
+                wcscpy_s(buffer, L"1");
+                m_isDefaultDepthValue = true;
+            } else {
+                m_isDefaultDepthValue = false;
+            }
+            SetWindowText(m_hDepthEdit, buffer);
+        }
+    }
+}
+
+void Application::HandleMinusKey() {
+    wchar_t buffer[32];
+    GetWindowText(m_hDepthEdit, buffer, 32);
+    int value = _wtoi(buffer);
+    swprintf_s(buffer, 32, L"%d", -value);
+    SetWindowText(m_hDepthEdit, buffer);
+    m_isDefaultDepthValue = false;
+}
+
+void Application::HandleDepthIncrement() {
+    wchar_t buffer[32];
+    GetWindowText(m_hDepthEdit, buffer, 32);
+    int value = _wtoi(buffer);
+    
+    // Increment the value (max reasonable depth would be around 50)
+    if (value < 50) {
+        value++;
+        swprintf_s(buffer, 32, L"%d", value);
+        SetWindowText(m_hDepthEdit, buffer);
+        m_isDefaultDepthValue = false;
+        
+        // Position cursor at the end
+        int len = static_cast<int>(wcslen(buffer));
+        SendMessage(m_hDepthEdit, EM_SETSEL, len, len);
+    }
+}
+
+void Application::HandleDepthDecrement() {
+    wchar_t buffer[32];
+    GetWindowText(m_hDepthEdit, buffer, 32);
+    int value = _wtoi(buffer);
+    
+    // Decrement the value (minimum of 1 for positive, unlimited for negative)
+    if (value > 1 || value < 0) {
+        value--;
+        // Don't let it go to 0, jump to -1 instead
+        if (value == 0) {
+            value = -1;
+        }
+        swprintf_s(buffer, 32, L"%d", value);
+        SetWindowText(m_hDepthEdit, buffer);
+        m_isDefaultDepthValue = false;
+        
+        // Position cursor at the end
+        int len = static_cast<int>(wcslen(buffer));
+        SendMessage(m_hDepthEdit, EM_SETSEL, len, len);
+    }
 }

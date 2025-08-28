@@ -26,7 +26,7 @@ std::wstring DirectoryTreeBuilder::BuildTree(const std::wstring& rootPath, int m
         if (result.empty()) {
             result = path.wstring();
         }
-        result += L"/\n";
+        result += L"/\r\n";
         
         for (size_t i = 0; i < root.children.size(); ++i) {
             bool isLast = (i == root.children.size() - 1);
@@ -45,7 +45,7 @@ std::wstring DirectoryTreeBuilder::BuildTreeForSelected(const std::vector<std::w
     
     for (const auto& path : selectedPaths) {
         if (!result.empty()) {
-            result += L"\n\n";
+            result += L"\r\n\r\n";
         }
         result += BuildTree(path, maxDepth);
     }
@@ -106,7 +106,7 @@ std::wstring DirectoryTreeBuilder::RenderTree(const TreeNode& node, const std::w
     if (node.isDirectory && !node.children.empty()) {
         result += L"/";
     }
-    result += L"\n";
+    result += L"\r\n";
     
     std::wstring newPrefix = prefix + (isLast ? TREE_SPACE : TREE_VERTICAL);
     
