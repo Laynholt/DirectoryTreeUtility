@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <string>
 #include <memory>
+#include <gdiplus.h>
 
 class DirectoryTreeBuilder;
 class SystemTray;
@@ -30,6 +31,17 @@ private:
     void OnPaint();
     void OnCommand(int commandId);
     void OnKeyDown(WPARAM key, LPARAM flags);
+    void OnMouseMove(LPARAM lParam);
+    void OnLButtonDown(LPARAM lParam);
+    void OnLButtonUp(LPARAM lParam);
+    void DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text, bool isHovered, bool isPressed);
+    bool IsPointInButton(HWND hBtn, POINT pt);
+    void InvalidateButton(HWND hBtn);
+    void ApplyDarkTheme();
+    void DrawCard(HDC hdc, RECT rect, const std::wstring& title = L"");
+    void DrawBackground(HDC hdc, RECT rect);
+    void DrawEditBorder(HWND hEdit);
+    static LRESULT CALLBACK TreeCanvasSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
     
     void GenerateTree();
     void CopyToClipboard();
@@ -63,7 +75,18 @@ private:
     int m_currentDepth;
     bool m_isMinimized;
     bool m_isDefaultDepthValue;
+    bool m_hasGeneratedTree;  // Flag to track if tree was generated
     std::wstring m_lastKnownPath;
+    
+    // GDI+ and custom drawing
+    ULONG_PTR m_gdiplusToken;
+    HWND m_hoveredButton;
+    HWND m_pressedButton;
+    
+    // Dark theme brushes
+    HBRUSH m_hBgBrush;
+    HBRUSH m_hEditBrush;
+    HBRUSH m_hStaticBrush;
     
     static const UINT_PTR STATUS_TIMER_ID = 1;
     static const UINT_PTR PATH_UPDATE_TIMER_ID = 2;

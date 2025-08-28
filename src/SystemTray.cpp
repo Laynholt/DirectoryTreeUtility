@@ -1,5 +1,6 @@
 #include "SystemTray.h"
 #include "Application.h"
+#include "resource.h"
 #include <windowsx.h>
 
 const wchar_t* TRAY_WINDOW_CLASS = L"DirectoryTreeUtilityTrayClass";
@@ -88,7 +89,7 @@ void SystemTray::RemoveFromTray() {
 }
 
 void SystemTray::CreateTrayIcon() {
-    m_hIcon = LoadIcon(GetModuleHandle(nullptr), IDI_APPLICATION);
+    m_hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_MAIN_ICON));
     
     m_nid.cbSize = sizeof(NOTIFYICONDATA);
     m_nid.hWnd = m_hTrayWnd;
@@ -132,6 +133,11 @@ LRESULT CALLBACK SystemTray::TrayWindowProc(HWND hWnd, UINT message, WPARAM wPar
     case WM_TRAYICON:
         if (pTray) {
             switch (lParam) {
+            case WM_LBUTTONUP:
+                // Toggle window visibility on left click
+                pTray->m_application->ToggleVisibility();
+                break;
+                
             case WM_LBUTTONDBLCLK:
                 pTray->m_application->ShowWindow(true);
                 break;

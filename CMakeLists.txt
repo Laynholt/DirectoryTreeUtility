@@ -34,10 +34,19 @@ set(HEADERS
     src/FileExplorerIntegration.h
     src/SystemTray.h
     src/GlobalHotkeys.h
+    src/resource.h
 )
 
+# Resource files
+set(RESOURCES
+    src/resource.rc
+)
+
+# Enable resource compilation
+enable_language(RC)
+
 # Create the executable
-add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
+add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS} ${RESOURCES})
 
 # Set target properties
 set_target_properties(${PROJECT_NAME} PROPERTIES
