@@ -275,16 +275,16 @@ int Application::Run() {
                         // Arrow keys for scrolling canvas when not in depth edit
                         switch (msg.wParam) {
                         case VK_UP:
-                            SendMessage(m_hTreeCanvas, WM_VSCROLL, SB_LINEUP, 0);
+                            ScrollCanvas(0);
                             break;
                         case VK_DOWN:
-                            SendMessage(m_hTreeCanvas, WM_VSCROLL, SB_LINEDOWN, 0);
+                            ScrollCanvas(1);
                             break;
                         case VK_LEFT:
-                            SendMessage(m_hTreeCanvas, WM_HSCROLL, SB_LINELEFT, 0);
+                            ScrollCanvas(2);
                             break;
                         case VK_RIGHT:
-                            SendMessage(m_hTreeCanvas, WM_HSCROLL, SB_LINERIGHT, 0);
+                            ScrollCanvas(3);
                             break;
                         }
                         continue;
@@ -500,19 +500,7 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             if (PtInRect(&canvasRect, pt)) {
                 // Mouse is over tree canvas - forward the wheel message
                 int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-                int scrollLines = 3; // Number of lines to scroll
-                
-                if (delta > 0) {
-                    // Scroll up
-                    for (int i = 0; i < scrollLines; i++) {
-                        SendMessage(m_hTreeCanvas, WM_VSCROLL, SB_LINEUP, 0);
-                    }
-                } else {
-                    // Scroll down
-                    for (int i = 0; i < scrollLines; i++) {
-                        SendMessage(m_hTreeCanvas, WM_VSCROLL, SB_LINEDOWN, 0);
-                    }
-                }
+                HandleMouseWheelScroll(delta);
                 return 0;
             }
         }
@@ -537,13 +525,7 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             KillTimer(m_hWnd, STATUS_TIMER_ID);
         }
         else if (wParam == PATH_UPDATE_TIMER_ID) {
-            std::wstring currentPath = FileExplorerIntegration::GetActiveExplorerPath();
-            if (currentPath.empty()) {
-                wchar_t buffer[MAX_PATH];
-                GetCurrentDirectory(MAX_PATH, buffer);
-                currentPath = buffer;
-            }
-            
+            std::wstring currentPath = GetCurrentWorkingPath();
             if (currentPath != m_lastKnownPath) {
                 m_lastKnownPath = currentPath;
                 SetWindowText(m_hPathEdit, currentPath.c_str());
@@ -691,16 +673,16 @@ void Application::OnKeyDown(WPARAM key, LPARAM) {
         }
         break;
     case VK_UP:
-        SendMessage(m_hTreeCanvas, WM_VSCROLL, SB_LINEUP, 0);
+        ScrollCanvas(0);
         break;
     case VK_DOWN:
-        SendMessage(m_hTreeCanvas, WM_VSCROLL, SB_LINEDOWN, 0);
+        ScrollCanvas(1);
         break;
     case VK_LEFT:
-        SendMessage(m_hTreeCanvas, WM_HSCROLL, SB_LINELEFT, 0);
+        ScrollCanvas(2);
         break;
     case VK_RIGHT:
-        SendMessage(m_hTreeCanvas, WM_HSCROLL, SB_LINERIGHT, 0);
+        ScrollCanvas(3);
         break;
     default:
         if (key >= '0' && key <= '9' && hFocused != m_hDepthEdit) {
@@ -736,13 +718,7 @@ void Application::GenerateTree() {
     GetWindowText(m_hDepthEdit, depthBuffer, 32);
     m_currentDepth = _wtoi(depthBuffer);
 
-    std::wstring currentPath = FileExplorerIntegration::GetActiveExplorerPath();
-    if (currentPath.empty()) {
-        wchar_t buffer[MAX_PATH];
-        GetCurrentDirectory(MAX_PATH, buffer);
-        currentPath = buffer;
-    }
-
+    std::wstring currentPath = GetCurrentWorkingPath();
     m_treeContent = m_treeBuilder->BuildTree(currentPath, m_currentDepth);
     SetWindowText(m_hTreeCanvas, m_treeContent.c_str());
     ShowStatusMessage(L"Дерево директорий построено");
@@ -808,12 +784,7 @@ void Application::SaveToFile() {
 }
 
 void Application::UpdateCurrentPath() {
-    std::wstring currentPath = FileExplorerIntegration::GetActiveExplorerPath();
-    if (currentPath.empty()) {
-        wchar_t buffer[MAX_PATH];
-        GetCurrentDirectory(MAX_PATH, buffer);
-        currentPath = buffer;
-    }
+    std::wstring currentPath = GetCurrentWorkingPath();
     m_lastKnownPath = currentPath;
     SetWindowText(m_hPathEdit, currentPath.c_str());
 }
@@ -1180,22 +1151,56 @@ LRESULT CALLBACK Application::TreeCanvasSubclassProc(HWND hWnd, UINT uMsg, WPARA
     case WM_MOUSEWHEEL:
         {
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-            int scrollLines = 3;
-            
-            if (delta > 0) {
-                // Scroll up
-                for (int i = 0; i < scrollLines; i++) {
-                    SendMessage(hWnd, WM_VSCROLL, SB_LINEUP, 0);
-                }
-            } else {
-                // Scroll down
-                for (int i = 0; i < scrollLines; i++) {
-                    SendMessage(hWnd, WM_VSCROLL, SB_LINEDOWN, 0);
-                }
+            Application* pApp = (Application*)dwRefData;
+            if (pApp) {
+                pApp->HandleMouseWheelScroll(delta);
             }
             return 0;
         }
     }
     
     return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+void Application::ScrollCanvas(int direction) {
+    switch (direction) {
+    case 0: // up
+        SendMessage(m_hTreeCanvas, WM_VSCROLL, SB_LINEUP, 0);
+        break;
+    case 1: // down
+        SendMessage(m_hTreeCanvas, WM_VSCROLL, SB_LINEDOWN, 0);
+        break;
+    case 2: // left
+        SendMessage(m_hTreeCanvas, WM_HSCROLL, SB_LINELEFT, 0);
+        break;
+    case 3: // right
+        SendMessage(m_hTreeCanvas, WM_HSCROLL, SB_LINERIGHT, 0);
+        break;
+    }
+}
+
+std::wstring Application::GetCurrentWorkingPath() {
+    std::wstring currentPath = FileExplorerIntegration::GetActiveExplorerPath();
+    if (currentPath.empty()) {
+        wchar_t buffer[MAX_PATH];
+        GetCurrentDirectory(MAX_PATH, buffer);
+        currentPath = buffer;
+    }
+    return currentPath;
+}
+
+void Application::HandleMouseWheelScroll(int delta) {
+    int scrollLines = 3; // Number of lines to scroll
+    
+    if (delta > 0) {
+        // Scroll up
+        for (int i = 0; i < scrollLines; i++) {
+            ScrollCanvas(0);
+        }
+    } else {
+        // Scroll down
+        for (int i = 0; i < scrollLines; i++) {
+            ScrollCanvas(1);
+        }
+    }
 }

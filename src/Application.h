@@ -52,6 +52,9 @@ private:
     void HandleMinusKey();
     void HandleDepthIncrement();
     void HandleDepthDecrement();
+    void ScrollCanvas(int direction); // 0=up, 1=down, 2=left, 3=right
+    std::wstring GetCurrentWorkingPath();
+    void HandleMouseWheelScroll(int delta);
 
     HINSTANCE m_hInstance;
     HWND m_hWnd;
