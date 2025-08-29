@@ -8,7 +8,6 @@
 class FileExplorerIntegration {
 public:
     static std::wstring GetActiveExplorerPath();
-    static std::vector<std::wstring> GetSelectedItems();
     static bool IsExplorerWindowActive();
     
 private:

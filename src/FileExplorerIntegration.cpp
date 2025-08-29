@@ -39,16 +39,6 @@ std::wstring FileExplorerIntegration::GetActiveExplorerPath() {
     return result;
 }
 
-std::vector<std::wstring> FileExplorerIntegration::GetSelectedItems() {
-    std::vector<std::wstring> selectedItems;
-    
-    // Simplified implementation - just return empty for now
-    // Getting selected items from Explorer is complex and unstable
-    // This functionality can be enhanced later with more robust approach
-    
-    return selectedItems;
-}
-
 bool FileExplorerIntegration::IsExplorerWindowActive() {
     HWND hWnd = GetForegroundWindow();
     if (!hWnd) return false;

@@ -38,8 +38,6 @@ Application::Application()
     , m_hCopyBtn(nullptr)
     , m_hSaveBtn(nullptr)
     , m_hTreeCanvas(nullptr)
-    , m_hScrollV(nullptr)
-    , m_hScrollH(nullptr)
     , m_currentDepth(1)
     , m_isMinimized(false)
     , m_isDefaultDepthValue(true)
@@ -461,12 +459,6 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             SetTextColor(hdcEdit, RGB(255, 255, 255));        // White text
             SetBkColor(hdcEdit, RGB(45, 45, 45));             // Dark card background
             return (INT_PTR)m_hEditBrush;
-        }
-        
-    case WM_CTLCOLORSCROLLBAR:
-        {
-            // Dark theme for scrollbars
-            return (INT_PTR)CreateSolidBrush(RGB(64, 64, 64)); // --border-color: #404040
         }
 
     case WM_SIZE:
@@ -1094,21 +1086,6 @@ void Application::InvalidateButton(HWND hBtn) {
     UpdateWindow(hBtn);
 }
 
-void Application::ApplyDarkTheme() {
-    // This function can be used to dynamically apply/reapply the dark theme
-    // Currently the theme is applied statically, but this could be extended
-    // for theme switching functionality like in the HTML example
-    
-    // Force redraw of all child windows to apply new colors
-    EnumChildWindows(m_hWnd, [](HWND hwndChild, LPARAM lParam) -> BOOL {
-        InvalidateRect(hwndChild, nullptr, TRUE);
-        return TRUE;
-    }, 0);
-    
-    // Redraw main window
-    InvalidateRect(m_hWnd, nullptr, TRUE);
-    UpdateWindow(m_hWnd);
-}
 
 void Application::DrawBackground(HDC hdc, RECT rect) {
     // Fill with main background color --bg-color: #1a1a1a

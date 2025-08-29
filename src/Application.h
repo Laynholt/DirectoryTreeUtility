@@ -37,7 +37,6 @@ private:
     void DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text, bool isHovered, bool isPressed);
     bool IsPointInButton(HWND hBtn, POINT pt);
     void InvalidateButton(HWND hBtn);
-    void ApplyDarkTheme();
     void DrawCard(HDC hdc, RECT rect, const std::wstring& title = L"");
     void DrawBackground(HDC hdc, RECT rect);
     void DrawEditBorder(HWND hEdit);
@@ -53,7 +52,6 @@ private:
     void HandleMinusKey();
     void HandleDepthIncrement();
     void HandleDepthDecrement();
-    static void CALLBACK StatusTimerProc(HWND hWnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime);
 
     HINSTANCE m_hInstance;
     HWND m_hWnd;
@@ -63,8 +61,6 @@ private:
     HWND m_hCopyBtn;
     HWND m_hSaveBtn;
     HWND m_hTreeCanvas;
-    HWND m_hScrollV;
-    HWND m_hScrollH;
     HWND m_hStatusLabel;
 
     std::unique_ptr<DirectoryTreeBuilder> m_treeBuilder;
