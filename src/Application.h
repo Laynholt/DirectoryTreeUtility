@@ -4,6 +4,10 @@
 #include <string>
 #include <memory>
 #include <map>
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <functional>
 
 class DirectoryTreeBuilder;
 class SystemTray;
@@ -41,17 +45,18 @@ private:
     void DrawBackground(HDC hdc, RECT rect);
     void DrawEditBorder(HWND hEdit);
     static LRESULT CALLBACK TreeCanvasSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
+    static LRESULT CALLBACK DepthEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
     
     void GenerateTree();
+    void GenerateTreeAsync();
+    void CancelGeneration();
+    void OnTreeGenerationCompleted(const std::wstring& result);
+    void OnTreeGenerationError(const std::wstring& error);
+    void UpdateProgressAnimation();
     void CopyToClipboard();
     void SaveToFile();
     void UpdateCurrentPath();
     void ShowStatusMessage(const std::wstring& message);
-    void HandleNumberInput(wchar_t digit);
-    void HandleBackspace();
-    void HandleMinusKey();
-    void HandleDepthIncrement();
-    void HandleDepthDecrement();
     void ScrollCanvas(int direction); // 0=up, 1=down, 2=left, 3=right
     std::wstring GetCurrentWorkingPath();
     void HandleMouseWheelScroll(int delta);
@@ -77,6 +82,13 @@ private:
     bool m_hasGeneratedTree;  // Flag to track if tree was generated
     std::wstring m_lastKnownPath;
     
+    // Multithreading support
+    std::thread m_generationThread;
+    std::atomic<bool> m_cancelGeneration;
+    std::atomic<bool> m_isGenerating;
+    std::mutex m_treeMutex;
+    int m_animationStep;
+    
     // GDI+ and custom drawing
     ULONG_PTR m_gdiplusToken;
     HWND m_hoveredButton;
@@ -98,6 +110,10 @@ private:
     static const UINT_PTR STATUS_TIMER_ID = 1;
     static const UINT_PTR PATH_UPDATE_TIMER_ID = 2;
     static const UINT_PTR ANIMATION_TIMER_ID = 3;
+    static const UINT_PTR PROGRESS_TIMER_ID = 4;
+    
+    static const UINT WM_TREE_COMPLETED = WM_USER + 100;
+    static const UINT WM_TREE_ERROR = WM_USER + 101;
 
     static const int MIN_WIDTH = 600;
     static const int MIN_HEIGHT = 400;

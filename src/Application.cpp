@@ -51,7 +51,10 @@ Application::Application()
     , m_hEditBrush(nullptr)
     , m_hStaticBrush(nullptr)
     , m_hFont(nullptr)
-    , m_hMonoFont(nullptr) {
+    , m_hMonoFont(nullptr)
+    , m_cancelGeneration(false)
+    , m_isGenerating(false)
+    , m_animationStep(0) {
     
     // Initialize dark theme brushes
     m_hBgBrush = CreateSolidBrush(RGB(26, 26, 26));      // --bg-color: #1a1a1a
@@ -60,6 +63,8 @@ Application::Application()
 }
 
 Application::~Application() {
+    // Ensure background thread is properly cleaned up
+    CancelGeneration();
 }
 
 bool Application::Initialize(HINSTANCE hInstance) {
@@ -169,10 +174,12 @@ void Application::CreateControls() {
     HWND hDepthLabel = CreateWindowEx(0, L"STATIC", L"Глубина дерева:",
                   WS_VISIBLE | WS_CHILD,
                   24, 18, 140, 20, m_hWnd, nullptr, m_hInstance, nullptr);
+    UNREFERENCED_PARAMETER(hDepthLabel);
     
     HWND hPathLabel = CreateWindowEx(0, L"STATIC", L"Текущий путь:",
                   WS_VISIBLE | WS_CHILD,
                   24, 48, 140, 20, m_hWnd, nullptr, m_hInstance, nullptr);
+    UNREFERENCED_PARAMETER(hPathLabel);
 
     // Enhanced depth input positioned inside card
     m_hDepthEdit = CreateWindowEx(0, L"EDIT", L"1",
@@ -205,6 +212,9 @@ void Application::CreateControls() {
     
     // Subclass the tree canvas to handle mouse wheel
     SetWindowSubclass(m_hTreeCanvas, TreeCanvasSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
+    
+    // Subclass the depth edit to handle minus key
+    SetWindowSubclass(m_hDepthEdit, DepthEditSubclassProc, 2, reinterpret_cast<DWORD_PTR>(this));
 
     // Status label positioned inside status card
     m_hStatusLabel = CreateWindowEx(0, L"STATIC", L"Готово",
@@ -255,7 +265,6 @@ int Application::Run() {
                 }
                 else if (msg.wParam == VK_RETURN) {
                     GenerateTree();
-                    ShowStatusMessage(L"Дерево директорий построено");
                     continue;
                 }
                 else if (msg.wParam == 'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {
@@ -267,23 +276,8 @@ int Application::Run() {
                     continue;
                 }
                 else if (msg.wParam >= VK_LEFT && msg.wParam <= VK_DOWN) {
-                    // Check if depth edit has focus - use arrows for value change
-                    if (msg.hwnd == m_hDepthEdit || GetFocus() == m_hDepthEdit) {
-                        switch (msg.wParam) {
-                        case VK_UP:
-                            HandleDepthIncrement();
-                            break;
-                        case VK_DOWN:
-                            HandleDepthDecrement();
-                            break;
-                        // Left/Right arrows work normally for cursor movement in edit control
-                        }
-                        // Don't continue here - let the edit control handle left/right arrows normally
-                        if (msg.wParam == VK_UP || msg.wParam == VK_DOWN) {
-                            continue;
-                        }
-                    } else {
-                        // Arrow keys for scrolling canvas when not in depth edit
+                    // Arrow keys for scrolling canvas when not in depth edit
+                    if (msg.hwnd != m_hDepthEdit && GetFocus() != m_hDepthEdit) {
                         switch (msg.wParam) {
                         case VK_UP:
                             ScrollCanvas(0);
@@ -304,25 +298,8 @@ int Application::Run() {
                 else if (msg.wParam >= '0' && msg.wParam <= '9' && msg.hwnd != m_hDepthEdit) {
                     // Number input - redirect to depth edit
                     SetFocus(m_hDepthEdit);
-                    HandleNumberInput(static_cast<wchar_t>(msg.wParam));
-                    continue;
-                }
-                else if (msg.wParam == VK_BACK) {
-                    if (msg.hwnd == m_hDepthEdit || GetFocus() == m_hDepthEdit) {
-                        // Handle Shift+Backspace in depth edit
-                        HandleBackspace();
-                        continue;
-                    } else {
-                        // Backspace - redirect to depth edit
-                        SetFocus(m_hDepthEdit);
-                        HandleBackspace();
-                        continue;
-                    }
-                }
-                else if (msg.wParam == VK_OEM_MINUS && msg.hwnd != m_hDepthEdit) {
-                    // Minus key - redirect to depth edit
-                    SetFocus(m_hDepthEdit);
-                    HandleMinusKey();
+                    // Send the character to the edit control
+                    SendMessage(m_hDepthEdit, WM_CHAR, msg.wParam, 0);
                     continue;
                 }
             }
@@ -338,6 +315,9 @@ void Application::Shutdown() {
     // Remove subclassing
     if (m_hTreeCanvas) {
         RemoveWindowSubclass(m_hTreeCanvas, TreeCanvasSubclassProc, 1);
+    }
+    if (m_hDepthEdit) {
+        RemoveWindowSubclass(m_hDepthEdit, DepthEditSubclassProc, 2);
     }
     
     if (m_globalHotkeys) {
@@ -623,6 +603,9 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 SetWindowText(m_hPathEdit, currentPath.c_str());
             }
         }
+        else if (wParam == PROGRESS_TIMER_ID) {
+            UpdateProgressAnimation();
+        }
         else if (wParam == ANIMATION_TIMER_ID) {
             // Only redraw buttons that actually changed
             for (auto& pair : m_buttonHoverAlpha) {
@@ -655,7 +638,21 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     case WM_DESTROY:
         KillTimer(m_hWnd, STATUS_TIMER_ID);
         KillTimer(m_hWnd, PATH_UPDATE_TIMER_ID);
+        KillTimer(m_hWnd, PROGRESS_TIMER_ID);
+        CancelGeneration(); // Ensure background thread is stopped
         PostQuitMessage(0);
+        break;
+
+    case WM_TREE_COMPLETED:
+        OnTreeGenerationCompleted(m_treeContent);
+        break;
+        
+    case WM_TREE_ERROR:
+        {
+            std::wstring* errorMsg = reinterpret_cast<std::wstring*>(lParam);
+            OnTreeGenerationError(*errorMsg);
+            delete errorMsg;
+        }
         break;
 
     default:
@@ -825,17 +822,142 @@ void Application::OnKeyDown(WPARAM key, LPARAM) {
 }
 
 void Application::GenerateTree() {
+    // Cancel any running generation
+    CancelGeneration();
+    
+    // Set focus to main window
+    SetFocus(m_hWnd);
+    
+    // Start async generation
+    GenerateTreeAsync();
+}
+
+void Application::GenerateTreeAsync() {
+    // Mark as generating
+    m_isGenerating = true;
+    m_cancelGeneration = false;
+    m_animationStep = 0;
+    
+    // Start progress animation
+    SetTimer(m_hWnd, PROGRESS_TIMER_ID, 500, nullptr);
+    
+    // Disable generate button
+    EnableWindow(m_hGenerateBtn, FALSE);
+    
+    // Show initial progress message
+    SetWindowText(m_hTreeCanvas, L"Генерируется дерево");
+    
+    // Get generation parameters
     wchar_t depthBuffer[32];
     GetWindowText(m_hDepthEdit, depthBuffer, 32);
-    m_currentDepth = _wtoi(depthBuffer);
-
+    int depth = _wtoi(depthBuffer);
     std::wstring currentPath = GetCurrentWorkingPath();
-    m_treeContent = m_treeBuilder->BuildTree(currentPath, m_currentDepth);
+    
+    // Start generation in background thread
+    if (m_generationThread.joinable()) {
+        m_generationThread.join();
+    }
+    
+    m_generationThread = std::thread([this, currentPath, depth]() {
+        try {
+            // Generate tree with cancellation support
+            std::wstring result = m_treeBuilder->BuildTreeAsync(
+                currentPath, 
+                depth,
+                [this]() { return m_cancelGeneration.load(); },
+                [this](const std::wstring& progress) {
+                    // Post progress update to UI thread
+                    UNREFERENCED_PARAMETER(progress);
+                    std::lock_guard<std::mutex> lock(m_treeMutex);
+                    // We could update progress here if needed
+                }
+            );
+            
+            if (!m_cancelGeneration) {
+                // Post completion message to UI thread
+                std::lock_guard<std::mutex> lock(m_treeMutex);
+                m_treeContent = result;
+                PostMessage(m_hWnd, WM_TREE_COMPLETED, 0, 0);
+            }
+        }
+        catch (const std::exception& e) {
+            if (!m_cancelGeneration) {
+                // Post error message to UI thread
+                std::wstring error = L"Ошибка: ";
+                error += std::wstring(e.what(), e.what() + strlen(e.what()));
+                PostMessage(m_hWnd, WM_TREE_ERROR, 0, reinterpret_cast<LPARAM>(new std::wstring(error)));
+            }
+        }
+    });
+}
+
+void Application::CancelGeneration() {
+    if (m_isGenerating) {
+        m_cancelGeneration = true;
+        
+        if (m_generationThread.joinable()) {
+            m_generationThread.join();
+        }
+        
+        // Stop progress timer
+        KillTimer(m_hWnd, PROGRESS_TIMER_ID);
+        
+        // Re-enable generate button
+        EnableWindow(m_hGenerateBtn, TRUE);
+        
+        m_isGenerating = false;
+    }
+}
+
+void Application::OnTreeGenerationCompleted(const std::wstring& result) {
+    UNREFERENCED_PARAMETER(result);
+    // Stop progress animation
+    KillTimer(m_hWnd, PROGRESS_TIMER_ID);
+    
+    // Update UI first
     SetWindowText(m_hTreeCanvas, m_treeContent.c_str());
+    
+    // Then show status message after tree is displayed
     ShowStatusMessage(L"Дерево директорий построено");
     
-    // Set flag that tree was generated
+    // Re-enable generate button
+    EnableWindow(m_hGenerateBtn, TRUE);
+    
+    // Set flags
     m_hasGeneratedTree = true;
+    m_isGenerating = false;
+    
+    // Update current depth
+    wchar_t buffer[32];
+    GetWindowText(m_hDepthEdit, buffer, 32);
+    m_currentDepth = _wtoi(buffer);
+}
+
+void Application::OnTreeGenerationError(const std::wstring& error) {
+    // Stop progress animation
+    KillTimer(m_hWnd, PROGRESS_TIMER_ID);
+    
+    // Update UI
+    SetWindowText(m_hTreeCanvas, error.c_str());
+    ShowStatusMessage(L"Ошибка при построении дерева");
+    
+    // Re-enable generate button
+    EnableWindow(m_hGenerateBtn, TRUE);
+    
+    m_isGenerating = false;
+}
+
+void Application::UpdateProgressAnimation() {
+    if (!m_isGenerating) return;
+    
+    m_animationStep = (m_animationStep + 1) % 4;
+    
+    std::wstring message = L"Генерируется дерево";
+    for (int i = 0; i < m_animationStep; i++) {
+        message += L".";
+    }
+    
+    SetWindowText(m_hTreeCanvas, message.c_str());
 }
 
 void Application::CopyToClipboard() {
@@ -912,112 +1034,6 @@ void Application::ShowStatusMessage(const std::wstring& message) {
     SetTimer(m_hWnd, STATUS_TIMER_ID, 3000, nullptr); // Hide after 3 seconds
 }
 
-void Application::HandleNumberInput(wchar_t digit) {
-    wchar_t buffer[32];
-    GetWindowText(m_hDepthEdit, buffer, 32);
-    
-    // If tree was generated, clear the field completely and start fresh
-    if (m_hasGeneratedTree) {
-        swprintf_s(buffer, 32, L"%c", digit);
-        m_isDefaultDepthValue = false;
-        m_hasGeneratedTree = false;  // Reset the flag
-    }
-    // If it's the default value "1" and user types a different digit, replace it
-    else if (m_isDefaultDepthValue && wcscmp(buffer, L"1") == 0 && digit != '1') {
-        swprintf_s(buffer, 32, L"%c", digit);
-        m_isDefaultDepthValue = false;
-    }
-    // If it's empty or zero, just set the digit
-    else if (wcslen(buffer) == 0 || (wcslen(buffer) == 1 && buffer[0] == L'0')) {
-        swprintf_s(buffer, 32, L"%c", digit);
-        m_isDefaultDepthValue = false;
-    }
-    // Otherwise append the digit
-    else {
-        wchar_t newChar[2] = { digit, L'\0' };
-        wcscat_s(buffer, 32, newChar);
-        m_isDefaultDepthValue = false;
-    }
-    SetWindowText(m_hDepthEdit, buffer);
-}
-
-void Application::HandleBackspace() {
-    if (GetKeyState(VK_SHIFT) & 0x8000) {
-        // Shift+Backspace: clear entire field completely
-        SetWindowText(m_hDepthEdit, L"");
-        m_isDefaultDepthValue = false;
-        m_hasGeneratedTree = false;  // Reset flag
-        // Select all text so user can see what happened
-        SendMessage(m_hDepthEdit, EM_SETSEL, 0, -1);
-    } else {
-        // Regular Backspace: delete character before cursor
-        wchar_t buffer[32];
-        GetWindowText(m_hDepthEdit, buffer, 32);
-        int len = static_cast<int>(wcslen(buffer));
-        if (len > 0) {
-            buffer[len - 1] = L'\0';
-            if (wcslen(buffer) == 0) {
-                wcscpy_s(buffer, L"1");
-                m_isDefaultDepthValue = true;
-            } else {
-                m_isDefaultDepthValue = false;
-            }
-            SetWindowText(m_hDepthEdit, buffer);
-        }
-        m_hasGeneratedTree = false;  // Reset flag on any edit
-    }
-}
-
-void Application::HandleMinusKey() {
-    wchar_t buffer[32];
-    GetWindowText(m_hDepthEdit, buffer, 32);
-    int value = _wtoi(buffer);
-    swprintf_s(buffer, 32, L"%d", -value);
-    SetWindowText(m_hDepthEdit, buffer);
-    m_isDefaultDepthValue = false;
-}
-
-void Application::HandleDepthIncrement() {
-    wchar_t buffer[32];
-    GetWindowText(m_hDepthEdit, buffer, 32);
-    int value = _wtoi(buffer);
-    
-    // Increment the value (max reasonable depth would be around 50)
-    if (value < 50) {
-        value++;
-        swprintf_s(buffer, 32, L"%d", value);
-        SetWindowText(m_hDepthEdit, buffer);
-        m_isDefaultDepthValue = false;
-        m_hasGeneratedTree = false;  // Reset flag
-        
-        // Position cursor at the end
-        int len = static_cast<int>(wcslen(buffer));
-        SendMessage(m_hDepthEdit, EM_SETSEL, len, len);
-    }
-}
-
-void Application::HandleDepthDecrement() {
-    wchar_t buffer[32];
-    GetWindowText(m_hDepthEdit, buffer, 32);
-    int value = _wtoi(buffer);
-    
-    // Decrement the value (minimum of 1 for positive, unlimited for negative)
-    if (value > 1 || value < 0) {
-        value--;
-        // Don't let it go to 0, jump to -1 instead
-        if (value == 0) {
-            value = -1;
-        }
-        swprintf_s(buffer, 32, L"%d", value);
-        SetWindowText(m_hDepthEdit, buffer);
-        m_isDefaultDepthValue = false;
-        m_hasGeneratedTree = false;  // Reset flag
-        
-        // Position cursor at the end
-        int len = static_cast<int>(wcslen(buffer));
-        SendMessage(m_hDepthEdit, EM_SETSEL, len, len);
-    }
-}
 
 
 void Application::OnLButtonDown(LPARAM lParam) {
@@ -1046,7 +1062,6 @@ void Application::OnLButtonUp(LPARAM lParam) {
         if (IsPointInButton(m_pressedButton, pt)) {
             if (m_pressedButton == m_hGenerateBtn) {
                 GenerateTree();
-                ShowStatusMessage(L"Дерево директорий построено");
             } else if (m_pressedButton == m_hCopyBtn) {
                 CopyToClipboard();
             } else if (m_pressedButton == m_hSaveBtn) {
@@ -1311,6 +1326,7 @@ void Application::DrawEditBorder(HWND hEdit) {
 }
 
 LRESULT CALLBACK Application::TreeCanvasSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    UNREFERENCED_PARAMETER(uIdSubclass);
     Application* pApp = reinterpret_cast<Application*>(dwRefData);
     
     switch (uMsg) {
@@ -1321,6 +1337,153 @@ LRESULT CALLBACK Application::TreeCanvasSubclassProc(HWND hWnd, UINT uMsg, WPARA
                 pApp->HandleMouseWheelScroll(delta);
             }
             return 0;
+        }
+    }
+    
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+LRESULT CALLBACK Application::DepthEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    UNREFERENCED_PARAMETER(uIdSubclass);
+    Application* pApp = reinterpret_cast<Application*>(dwRefData);
+    
+    switch (uMsg) {
+    case WM_CHAR:
+        {
+            wchar_t ch = static_cast<wchar_t>(wParam);
+            if (ch == L'-') {
+                // Handle minus key - toggle sign of the number
+                wchar_t buffer[32];
+                GetWindowText(hWnd, buffer, 32);
+                int value = _wtoi(buffer);
+                swprintf_s(buffer, 32, L"%d", -value);
+                SetWindowText(hWnd, buffer);
+                pApp->m_isDefaultDepthValue = false;
+                pApp->m_hasGeneratedTree = false;
+                return 0; // Don't let the default handler process this
+            } else if (ch == VK_BACK) {
+                // Handle backspace key
+                if (GetKeyState(VK_SHIFT) & 0x8000) {
+                    // Shift+Backspace: clear entire field completely
+                    SetWindowText(hWnd, L"");
+                    pApp->m_isDefaultDepthValue = false;
+                    pApp->m_hasGeneratedTree = false;
+                    // Select all text so user can see what happened
+                    SendMessage(hWnd, EM_SETSEL, 0, -1);
+                } else {
+                    // Regular Backspace: delete character before cursor
+                    wchar_t buffer[32];
+                    GetWindowText(hWnd, buffer, 32);
+                    int len = static_cast<int>(wcslen(buffer));
+                    if (len > 0) {
+                        buffer[len - 1] = L'\0';
+                        if (wcslen(buffer) == 0) {
+                            wcscpy_s(buffer, L"1");
+                            pApp->m_isDefaultDepthValue = true;
+                        } else {
+                            pApp->m_isDefaultDepthValue = false;
+                        }
+                        SetWindowText(hWnd, buffer);
+                    }
+                    pApp->m_hasGeneratedTree = false;
+                }
+                return 0; // Don't let the default handler process this
+            } else if (ch >= L'0' && ch <= L'9') {
+                // Handle number input
+                wchar_t buffer[32];
+                GetWindowText(hWnd, buffer, 32);
+                
+                // If tree was generated, clear the field completely and start fresh
+                if (pApp->m_hasGeneratedTree) {
+                    swprintf_s(buffer, 32, L"%c", ch);
+                    pApp->m_isDefaultDepthValue = false;
+                    pApp->m_hasGeneratedTree = false;
+                }
+                // If it's the default value "1" and user types a different digit, replace it
+                else if (pApp->m_isDefaultDepthValue && wcscmp(buffer, L"1") == 0 && ch != '1') {
+                    swprintf_s(buffer, 32, L"%c", ch);
+                    pApp->m_isDefaultDepthValue = false;
+                }
+                // If it's empty or zero, just set the digit
+                else if (wcslen(buffer) == 0 || (wcslen(buffer) == 1 && buffer[0] == L'0')) {
+                    swprintf_s(buffer, 32, L"%c", ch);
+                    pApp->m_isDefaultDepthValue = false;
+                }
+                // Otherwise, append the digit unless it would result in leading zero
+                else {
+                    if (!(buffer[0] == L'0' && wcslen(buffer) == 1)) {
+                        size_t len = wcslen(buffer);
+                        if (len < 31) { // Leave space for null terminator
+                            buffer[len] = ch;
+                            buffer[len + 1] = L'\0';
+                        }
+                    }
+                    pApp->m_isDefaultDepthValue = false;
+                }
+                
+                SetWindowText(hWnd, buffer);
+                // Position cursor at the end
+                int len = static_cast<int>(wcslen(buffer));
+                SendMessage(hWnd, EM_SETSEL, len, len);
+                return 0; // Don't let the default handler process this
+            }
+            // Allow only numbers, minus, and backspace - block other characters
+            else if (ch < 32) {
+                // Allow control characters (like Ctrl+A, Ctrl+C, etc.)
+                break;
+            } else {
+                // Block all other printable characters
+                return 0;
+            }
+            break;
+        }
+    case WM_KEYDOWN:
+        {
+            if (wParam == VK_UP) {
+                // Handle up arrow - increment value
+                wchar_t buffer[32];
+                GetWindowText(hWnd, buffer, 32);
+                int value = _wtoi(buffer);
+                
+                // Increment the value (max reasonable depth would be around 50)
+                if (value < 50) {
+                    value++;
+                    swprintf_s(buffer, 32, L"%d", value);
+                    SetWindowText(hWnd, buffer);
+                    pApp->m_isDefaultDepthValue = false;
+                    pApp->m_hasGeneratedTree = false;
+                    
+                    // Position cursor at the end
+                    int len = static_cast<int>(wcslen(buffer));
+                    SendMessage(hWnd, EM_SETSEL, len, len);
+                }
+                return 0; // Don't let the default handler process this
+            } else if (wParam == VK_DOWN) {
+                // Handle down arrow - decrement value
+                wchar_t buffer[32];
+                GetWindowText(hWnd, buffer, 32);
+                int value = _wtoi(buffer);
+                
+                // Decrement the value (minimum of 1 for positive, unlimited for negative)
+                if (value > 1 || value < 0) {
+                    value--;
+                    // Don't let it go to 0, jump to -1 instead
+                    if (value == 0) {
+                        value = -1;
+                    }
+                    swprintf_s(buffer, 32, L"%d", value);
+                    SetWindowText(hWnd, buffer);
+                    pApp->m_isDefaultDepthValue = false;
+                    pApp->m_hasGeneratedTree = false;
+                    
+                    // Position cursor at the end
+                    int len = static_cast<int>(wcslen(buffer));
+                    SendMessage(hWnd, EM_SETSEL, len, len);
+                }
+                return 0; // Don't let the default handler process this
+            }
+            // Let Left/Right arrows work normally for cursor movement
+            break;
         }
     }
     

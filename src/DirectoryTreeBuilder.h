@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <functional>
+#include <atomic>
 
 struct TreeNode {
     std::wstring name;
@@ -19,9 +21,16 @@ public:
     ~DirectoryTreeBuilder();
 
     std::wstring BuildTree(const std::wstring& rootPath, int maxDepth = -1);
+    std::wstring BuildTreeAsync(const std::wstring& rootPath, int maxDepth, 
+                               std::function<bool()> shouldCancel = nullptr,
+                               std::function<void(const std::wstring&)> progressCallback = nullptr);
 
 private:
     TreeNode BuildNodeTree(const std::filesystem::path& path, int currentDepth, int maxDepth);
+    TreeNode BuildNodeTreeAsync(const std::filesystem::path& path, int currentDepth, int maxDepth,
+                                std::function<bool()> shouldCancel,
+                                std::function<void(const std::wstring&)> progressCallback,
+                                int& processedCount);
     std::wstring RenderTree(const TreeNode& root, const std::wstring& prefix = L"", bool isLast = true);
     
 
