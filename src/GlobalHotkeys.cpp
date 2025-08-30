@@ -48,7 +48,7 @@ bool GlobalHotkeys::Initialize() {
         return false;
     }
 
-    SetWindowLongPtr(m_hHotkeyWnd, GWLP_USERDATA, (LONG_PTR)this);
+    SetWindowLongPtr(m_hHotkeyWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
     if (!RegisterHotkey(HOTKEY_ALT_T, MOD_ALT, 'T')) {
         return false;
@@ -75,14 +75,14 @@ void GlobalHotkeys::UnregisterHotkey(int id) {
 }
 
 LRESULT CALLBACK GlobalHotkeys::HotkeyWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
-    GlobalHotkeys* pHotkeys = (GlobalHotkeys*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
+    GlobalHotkeys* pHotkeys = reinterpret_cast<GlobalHotkeys*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
     
     switch (message) {
     case WM_CREATE:
         {
-            CREATESTRUCT* pCreate = (CREATESTRUCT*)lParam;
-            pHotkeys = (GlobalHotkeys*)pCreate->lpCreateParams;
-            SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)pHotkeys);
+            CREATESTRUCT* pCreate = reinterpret_cast<CREATESTRUCT*>(lParam);
+            pHotkeys = static_cast<GlobalHotkeys*>(pCreate->lpCreateParams);
+            SetWindowLongPtr(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pHotkeys));
         }
         break;
 

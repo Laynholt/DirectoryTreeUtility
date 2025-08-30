@@ -4,6 +4,7 @@
 #include "GlobalHotkeys.h"
 #include "FileExplorerIntegration.h"
 #include "resource.h"
+
 #include <windowsx.h>
 #include <commctrl.h>
 #include <commdlg.h>
@@ -45,9 +46,12 @@ Application::Application()
     , m_gdiplusToken(0)
     , m_hoveredButton(nullptr)
     , m_pressedButton(nullptr)
+    , m_animationTimer(0)
     , m_hBgBrush(nullptr)
     , m_hEditBrush(nullptr)
-    , m_hStaticBrush(nullptr) {
+    , m_hStaticBrush(nullptr)
+    , m_hFont(nullptr)
+    , m_hMonoFont(nullptr) {
     
     // Initialize dark theme brushes
     m_hBgBrush = CreateSolidBrush(RGB(26, 26, 26));      // --bg-color: #1a1a1a
@@ -88,7 +92,7 @@ bool Application::Initialize(HINSTANCE hInstance) {
     wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_MAIN_ICON));
     wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
     // Use dark theme background color
-    wcex.hbrBackground = CreateSolidBrush(RGB(26, 26, 26)); // --bg-color: #1a1a1a
+    wcex.hbrBackground = m_hBgBrush; // --bg-color: #1a1a1a
     wcex.lpszMenuName = nullptr;
     wcex.lpszClassName = WINDOW_CLASS;
     wcex.hIconSm = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_MAIN_ICON));
@@ -143,6 +147,8 @@ bool Application::Initialize(HINSTANCE hInstance) {
         return false;
     }
 
+    m_systemTray->AddToTray();
+    
     UpdateCurrentPath();
 
     // Start timer for dynamic path updating (check every 2 seconds)
@@ -153,7 +159,7 @@ bool Application::Initialize(HINSTANCE hInstance) {
 
 void Application::CreateControls() {
     // Create modern font matching the HTML example
-    HFONT hFont = CreateFont(
+    m_hFont = CreateFont(
         -15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI"
@@ -171,34 +177,34 @@ void Application::CreateControls() {
     // Enhanced depth input positioned inside card
     m_hDepthEdit = CreateWindowEx(0, L"EDIT", L"1",
                                  WS_VISIBLE | WS_CHILD | ES_NUMBER,
-                                 174, 16, 80, 24, m_hWnd, (HMENU)ID_DEPTH_EDIT, m_hInstance, nullptr);
+                                 174, 16, 80, 24, m_hWnd, reinterpret_cast<HMENU>(ID_DEPTH_EDIT), m_hInstance, nullptr);
 
     // Enhanced path display inside card
     m_hPathEdit = CreateWindowEx(0, L"EDIT", L"",
                                 WS_VISIBLE | WS_CHILD | ES_READONLY,
-                                174, 46, 480, 24, m_hWnd, (HMENU)ID_PATH_EDIT, m_hInstance, nullptr);
+                                174, 46, 480, 24, m_hWnd, reinterpret_cast<HMENU>(ID_PATH_EDIT), m_hInstance, nullptr);
 
     // Buttons positioned inside button card - larger size and vertically centered
     m_hGenerateBtn = CreateWindowEx(0, L"BUTTON", L"Построить дерево",
                                    WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-                                   100, 104, 170, 32, m_hWnd, (HMENU)ID_GENERATE_BTN, m_hInstance, nullptr);
+                                   100, 104, 170, 32, m_hWnd, reinterpret_cast<HMENU>(ID_GENERATE_BTN), m_hInstance, nullptr);
 
     m_hCopyBtn = CreateWindowEx(0, L"BUTTON", L"Копировать",
                                WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-                               280, 104, 150, 32, m_hWnd, (HMENU)ID_COPY_BTN, m_hInstance, nullptr);
+                               280, 104, 150, 32, m_hWnd, reinterpret_cast<HMENU>(ID_COPY_BTN), m_hInstance, nullptr);
 
     m_hSaveBtn = CreateWindowEx(0, L"BUTTON", L"Сохранить",
                                WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-                               440, 104, 150, 32, m_hWnd, (HMENU)ID_SAVE_BTN, m_hInstance, nullptr);
+                               440, 104, 150, 32, m_hWnd, reinterpret_cast<HMENU>(ID_SAVE_BTN), m_hInstance, nullptr);
 
     // Tree canvas positioned inside tree card - scrollbars appear automatically when needed
     m_hTreeCanvas = CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                   WS_VISIBLE | WS_CHILD |
                                   ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL,
-                                  24, 176, 740, 300, m_hWnd, (HMENU)ID_TREE_CANVAS, m_hInstance, nullptr);
+                                  24, 176, 740, 300, m_hWnd, reinterpret_cast<HMENU>(ID_TREE_CANVAS), m_hInstance, nullptr);
     
     // Subclass the tree canvas to handle mouse wheel
-    SetWindowSubclass(m_hTreeCanvas, TreeCanvasSubclassProc, 1, (DWORD_PTR)this);
+    SetWindowSubclass(m_hTreeCanvas, TreeCanvasSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
 
     // Status label positioned inside status card
     m_hStatusLabel = CreateWindowEx(0, L"STATIC", L"Готово",
@@ -206,9 +212,9 @@ void Application::CreateControls() {
                                    24, 488, 740, 20, m_hWnd, nullptr, m_hInstance, nullptr);
 
     // Apply the modern font to all controls
-    SendMessage(m_hDepthEdit, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(FALSE, 0));
-    SendMessage(m_hPathEdit, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(FALSE, 0));
-    SendMessage(m_hStatusLabel, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(FALSE, 0));
+    SendMessage(m_hDepthEdit, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), MAKELPARAM(FALSE, 0));
+    SendMessage(m_hPathEdit, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), MAKELPARAM(FALSE, 0));
+    SendMessage(m_hStatusLabel, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), MAKELPARAM(FALSE, 0));
     
     // Apply font to static labels too
     EnumChildWindows(m_hWnd, [](HWND hwndChild, LPARAM lParam) -> BOOL {
@@ -218,15 +224,20 @@ void Application::CreateControls() {
             SendMessage(hwndChild, WM_SETFONT, lParam, MAKELPARAM(FALSE, 0));
         }
         return TRUE;
-    }, (LPARAM)hFont);
+    }, reinterpret_cast<LPARAM>(m_hFont));
 
     // Enhanced monospace font for tree display
-    HFONT hMonoFont = CreateFont(
+    m_hMonoFont = CreateFont(
         -15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas"
     );
-    SendMessage(m_hTreeCanvas, WM_SETFONT, (WPARAM)hMonoFont, MAKELPARAM(FALSE, 0));
+    SendMessage(m_hTreeCanvas, WM_SETFONT, reinterpret_cast<WPARAM>(m_hMonoFont), MAKELPARAM(FALSE, 0));
+    
+    // Initialize button animation values
+    m_buttonHoverAlpha[m_hGenerateBtn] = 0.0f;
+    m_buttonHoverAlpha[m_hCopyBtn] = 0.0f;
+    m_buttonHoverAlpha[m_hSaveBtn] = 0.0f;
 }
 
 int Application::Run() {
@@ -293,7 +304,7 @@ int Application::Run() {
                 else if (msg.wParam >= '0' && msg.wParam <= '9' && msg.hwnd != m_hDepthEdit) {
                     // Number input - redirect to depth edit
                     SetFocus(m_hDepthEdit);
-                    HandleNumberInput((wchar_t)msg.wParam);
+                    HandleNumberInput(static_cast<wchar_t>(msg.wParam));
                     continue;
                 }
                 else if (msg.wParam == VK_BACK) {
@@ -320,7 +331,7 @@ int Application::Run() {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
-    return (int)msg.wParam;
+    return static_cast<int>(msg.wParam);
 }
 
 void Application::Shutdown() {
@@ -347,6 +358,16 @@ void Application::Shutdown() {
     if (m_hBgBrush) DeleteObject(m_hBgBrush);
     if (m_hEditBrush) DeleteObject(m_hEditBrush);
     if (m_hStaticBrush) DeleteObject(m_hStaticBrush);
+    
+    // Clean up fonts
+    if (m_hFont) DeleteObject(m_hFont);
+    if (m_hMonoFont) DeleteObject(m_hMonoFont);
+    
+    // Stop animation timer if running
+    if (m_animationTimer) {
+        KillTimer(m_hWnd, ANIMATION_TIMER_ID);
+        m_animationTimer = 0;
+    }
     
     // Shutdown GDI+
     if (m_gdiplusToken) {
@@ -380,7 +401,6 @@ void Application::ToggleVisibility() {
     } else if (GetForegroundWindow() == m_hWnd) {
         // Window is visible and active - hide it
         ShowWindow(false);
-        m_systemTray->AddToTray();
     } else {
         // Window is visible but not active - bring to front
         SetForegroundWindow(m_hWnd);
@@ -393,12 +413,12 @@ LRESULT CALLBACK Application::WindowProc(HWND hWnd, UINT message, WPARAM wParam,
     Application* pApp = nullptr;
     
     if (message == WM_NCCREATE) {
-        CREATESTRUCT* pCreate = (CREATESTRUCT*)lParam;
-        pApp = (Application*)pCreate->lpCreateParams;
-        SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)pApp);
+        CREATESTRUCT* pCreate = reinterpret_cast<CREATESTRUCT*>(lParam);
+        pApp = static_cast<Application*>(pCreate->lpCreateParams);
+        SetWindowLongPtr(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pApp));
         return DefWindowProc(hWnd, message, wParam, lParam);
     } else {
-        pApp = (Application*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
+        pApp = reinterpret_cast<Application*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
     }
 
     if (pApp) {
@@ -411,7 +431,7 @@ LRESULT CALLBACK Application::WindowProc(HWND hWnd, UINT message, WPARAM wParam,
 LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_COMMAND:
-        if (HIWORD(wParam) == EN_SETFOCUS && (HWND)lParam == m_hDepthEdit) {
+        if (HIWORD(wParam) == EN_SETFOCUS && reinterpret_cast<HWND>(lParam) == m_hDepthEdit) {
             // When depth edit gets focus, select all text for easy replacement
             SendMessage(m_hDepthEdit, EM_SETSEL, 0, -1);
         }
@@ -420,25 +440,21 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 
     case WM_DRAWITEM:
         {
-            DRAWITEMSTRUCT* dis = (DRAWITEMSTRUCT*)lParam;
+            DRAWITEMSTRUCT* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
             if (dis->CtlType == ODT_BUTTON) {
                 std::wstring buttonText;
                 wchar_t text[256];
                 GetWindowText(dis->hwndItem, text, 256);
                 buttonText = text;
                 
-                bool isHovered = (m_hoveredButton == dis->hwndItem);
                 bool isPressed = (m_pressedButton == dis->hwndItem) || (dis->itemState & ODS_SELECTED);
                 
-                DrawCustomButton(dis->hDC, dis->hwndItem, buttonText, isHovered, isPressed);
+                DrawCustomButton(dis->hDC, dis->hwndItem, buttonText, isPressed);
                 return TRUE;
             }
         }
         break;
 
-    case WM_MOUSEMOVE:
-        OnMouseMove(lParam);
-        break;
 
     case WM_LBUTTONDOWN:
         OnLButtonDown(lParam);
@@ -448,22 +464,94 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         OnLButtonUp(lParam);
         break;
 
+    case WM_SETCURSOR:
+        {
+            // Handle cursor only for client area
+            if (LOWORD(lParam) == HTCLIENT) {
+                POINT pt;
+                GetCursorPos(&pt);
+                ScreenToClient(m_hWnd, &pt);
+                
+                HWND previousHovered = m_hoveredButton;
+                m_hoveredButton = nullptr;
+                
+                // Check if mouse is over any button
+                if (IsPointInButton(m_hGenerateBtn, pt)) {
+                    m_hoveredButton = m_hGenerateBtn;
+                } else if (IsPointInButton(m_hCopyBtn, pt)) {
+                    m_hoveredButton = m_hCopyBtn;
+                } else if (IsPointInButton(m_hSaveBtn, pt)) {
+                    m_hoveredButton = m_hSaveBtn;
+                }
+                
+                // Start animation if hover state changed
+                if (previousHovered != m_hoveredButton) {
+                    // Start fast animation timer
+                    if (!m_animationTimer) {
+                        m_animationTimer = SetTimer(m_hWnd, ANIMATION_TIMER_ID, 8, nullptr); // ~120 FPS for smoother fast animation
+                    }
+                }
+                
+                // Set appropriate cursor based on what's under the mouse
+                HWND childWnd = ChildWindowFromPoint(m_hWnd, pt);
+                if (childWnd && childWnd != m_hWnd) {
+                    // Check if it's an edit control
+                    wchar_t className[256];
+                    GetClassName(childWnd, className, 256);
+                    if (wcscmp(className, L"Edit") == 0) {
+                        // Check if it's a read-only edit control
+                        LONG style = GetWindowLong(childWnd, GWL_STYLE);
+                        if (style & ES_READONLY) {
+                            // Read-only edit - show arrow cursor
+                            SetCursor(LoadCursor(nullptr, IDC_ARROW));
+                        } else {
+                            // Editable field - show I-beam cursor
+                            SetCursor(LoadCursor(nullptr, IDC_IBEAM));
+                        }
+                    } else {
+                        // Over other controls - show arrow
+                        SetCursor(LoadCursor(nullptr, IDC_ARROW));
+                    }
+                } else {
+                    // Over main window background - show arrow
+                    SetCursor(LoadCursor(nullptr, IDC_ARROW));
+                }
+                
+                return TRUE; // We handled the cursor
+            }
+            // Let Windows handle non-client area cursors
+            return DefWindowProc(m_hWnd, message, wParam, lParam);
+        }
+        break;
+
+    case WM_MOUSELEAVE:
+        {
+            // Mouse left window - clear hover state
+            HWND previousHovered = m_hoveredButton;
+            m_hoveredButton = nullptr;
+            
+            if (previousHovered) {
+                InvalidateButton(previousHovered);
+            }
+        }
+        break;
+
     case WM_CTLCOLORSTATIC:
         {
             // Dark theme for static text (labels) - same background as cards
-            HDC hdcStatic = (HDC)wParam;
+            HDC hdcStatic = reinterpret_cast<HDC>(wParam);
             SetTextColor(hdcStatic, RGB(255, 255, 255));      // White text
             SetBkColor(hdcStatic, RGB(45, 45, 45));           // Card background color
-            return (INT_PTR)m_hEditBrush;  // Use same brush as cards
+            return reinterpret_cast<INT_PTR>(m_hEditBrush);  // Use same brush as cards
         }
         
     case WM_CTLCOLOREDIT:
         {
             // Dark theme for edit controls - --card-bg: #2d2d2d with --text-color: #ffffff
-            HDC hdcEdit = (HDC)wParam;
+            HDC hdcEdit = reinterpret_cast<HDC>(wParam);
             SetTextColor(hdcEdit, RGB(255, 255, 255));        // White text
             SetBkColor(hdcEdit, RGB(45, 45, 45));             // Dark card background
-            return (INT_PTR)m_hEditBrush;
+            return reinterpret_cast<INT_PTR>(m_hEditBrush);
         }
 
     case WM_SIZE:
@@ -513,7 +601,7 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 
     case WM_GETMINMAXINFO:
         {
-            MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+            MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
             mmi->ptMinTrackSize.x = MIN_WIDTH;
             mmi->ptMinTrackSize.y = MIN_HEIGHT;
         }
@@ -521,7 +609,6 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 
     case WM_CLOSE:
         ShowWindow(false);
-        m_systemTray->AddToTray();
         return 0;
 
     case WM_TIMER:
@@ -535,6 +622,25 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 m_lastKnownPath = currentPath;
                 SetWindowText(m_hPathEdit, currentPath.c_str());
             }
+        }
+        else if (wParam == ANIMATION_TIMER_ID) {
+            // Only redraw buttons that actually changed
+            for (auto& pair : m_buttonHoverAlpha) {
+                HWND button = pair.first;
+                float& alpha = pair.second;
+                float targetAlpha = (button == m_hoveredButton) ? 1.0f : 0.0f;
+                
+                // Only update and redraw if there's a change
+                if (alpha != targetAlpha) {
+                    alpha = targetAlpha;
+                    // Direct redraw without invalidation to avoid clearing
+                    RedrawButtonDirect(button);
+                }
+            }
+            
+            // Stop timer immediately
+            KillTimer(m_hWnd, ANIMATION_TIMER_ID);
+            m_animationTimer = 0;
         }
         break;
 
@@ -698,17 +804,17 @@ void Application::OnKeyDown(WPARAM key, LPARAM) {
             
             // If it's the default value "1" and user types a different digit, replace it
             if (m_isDefaultDepthValue && wcscmp(buffer, L"1") == 0 && key != '1') {
-                swprintf_s(buffer, 32, L"%c", (wchar_t)key);
+                swprintf_s(buffer, 32, L"%c", static_cast<wchar_t>(key));
                 m_isDefaultDepthValue = false;
             }
             // If it's empty or zero, just set the digit
             else if (wcslen(buffer) == 0 || (wcslen(buffer) == 1 && buffer[0] == L'0')) {
-                swprintf_s(buffer, 32, L"%c", (wchar_t)key);
+                swprintf_s(buffer, 32, L"%c", static_cast<wchar_t>(key));
                 m_isDefaultDepthValue = false;
             }
             // Otherwise append the digit
             else {
-                wchar_t newChar[2] = { (wchar_t)key, L'\0' };
+                wchar_t newChar[2] = { static_cast<wchar_t>(key), L'\0' };
                 wcscat_s(buffer, 32, newChar);
                 m_isDefaultDepthValue = false;
             }
@@ -743,7 +849,7 @@ void Application::CopyToClipboard() {
         if (hMem) {
             void* pMem = GlobalLock(hMem);
             if (pMem) {
-                wcscpy_s((wchar_t*)pMem, m_treeContent.length() + 1, m_treeContent.c_str());
+                wcscpy_s(static_cast<wchar_t*>(pMem), m_treeContent.length() + 1, m_treeContent.c_str());
                 GlobalUnlock(hMem);
                 SetClipboardData(CF_UNICODETEXT, hMem);
             }
@@ -771,7 +877,14 @@ void Application::SaveToFile() {
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
 
     if (GetSaveFileName(&ofn)) {
-        HANDLE hFile = CreateFile(szFile, GENERIC_WRITE, 0, nullptr,
+        std::wstring fileName(szFile);
+        
+        // Add .txt extension if not present
+        if (fileName.length() < 4 || fileName.substr(fileName.length() - 4) != L".txt") {
+            fileName += L".txt";
+        }
+        
+        HANDLE hFile = CreateFile(fileName.c_str(), GENERIC_WRITE, 0, nullptr,
                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (hFile != INVALID_HANDLE_VALUE) {
             DWORD bytesWritten;
@@ -781,7 +894,7 @@ void Application::SaveToFile() {
                 utf8Content.resize(utf8Length - 1);
                 WideCharToMultiByte(CP_UTF8, 0, m_treeContent.c_str(), -1, &utf8Content[0], utf8Length, nullptr, nullptr);
             }
-            WriteFile(hFile, utf8Content.c_str(), (DWORD)utf8Content.length(), &bytesWritten, nullptr);
+            WriteFile(hFile, utf8Content.c_str(), static_cast<DWORD>(utf8Content.length()), &bytesWritten, nullptr);
             CloseHandle(hFile);
             ShowStatusMessage(L"Файл сохранен");
         }
@@ -906,29 +1019,6 @@ void Application::HandleDepthDecrement() {
     }
 }
 
-void Application::OnMouseMove(LPARAM lParam) {
-    POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-    HWND previousHovered = m_hoveredButton;
-    m_hoveredButton = nullptr;
-    
-    // Check if mouse is over any button
-    if (IsPointInButton(m_hGenerateBtn, pt)) {
-        m_hoveredButton = m_hGenerateBtn;
-    } else if (IsPointInButton(m_hCopyBtn, pt)) {
-        m_hoveredButton = m_hCopyBtn;
-    } else if (IsPointInButton(m_hSaveBtn, pt)) {
-        m_hoveredButton = m_hSaveBtn;
-    }
-    
-    // Redraw buttons if hover state changed
-    if (previousHovered != m_hoveredButton) {
-        if (previousHovered) InvalidateButton(previousHovered);
-        if (m_hoveredButton) InvalidateButton(m_hoveredButton);
-        
-        // Set cursor
-        SetCursor(LoadCursor(nullptr, m_hoveredButton ? IDC_HAND : IDC_ARROW));
-    }
-}
 
 void Application::OnLButtonDown(LPARAM lParam) {
     POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -970,38 +1060,64 @@ void Application::OnLButtonUp(LPARAM lParam) {
     }
 }
 
-void Application::DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text, bool isHovered, bool isPressed) {
+void Application::DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text, bool isPressed) {
     RECT rect;
     GetClientRect(hBtn, &rect);
     
-    Graphics graphics(hdc);
+    // Get animation alpha for smooth hover effect
+    float hoverAlpha = m_buttonHoverAlpha[hBtn];
+    
+    // Create memory DC for double buffering
+    HDC memDC = CreateCompatibleDC(hdc);
+    HBITMAP memBitmap = CreateCompatibleBitmap(hdc, rect.right - rect.left, rect.bottom - rect.top);
+    HBITMAP oldBitmap = static_cast<HBITMAP>(SelectObject(memDC, memBitmap));
+    
+    // Draw to memory DC
+    Graphics graphics(memDC);
     graphics.SetSmoothingMode(SmoothingModeHighQuality);
     graphics.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
     graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
     
-    // Clear the background to prevent white corners
+    // Set background to match parent card background exactly
     graphics.Clear(Color(255, 45, 45, 45)); // Card background color
 
-    // Button colors as requested: (68,68,68) base color
-    Color bgColor, borderColor, textColor, shadowColor;
+    // Smooth color interpolation based on animation alpha
+    Color baseColor = Color(255, 68, 68, 68);      // Default
+    Color hoverColor = Color(255, 78, 78, 78);     // Hover
+    Color pressedColor = Color(255, 58, 58, 58);   // Pressed
+    
+    Color baseBorder = Color(255, 85, 85, 85);
+    Color hoverBorder = Color(255, 100, 100, 100);
+    Color pressedBorder = Color(255, 80, 80, 80);
+    
+    Color baseText = Color(255, 230, 230, 230);
+    Color hoverText = Color(255, 255, 255, 255);
+    Color pressedText = Color(255, 220, 220, 220);
+    
+    
+    // Interpolate colors based on hover animation alpha
+    Color bgColor, borderColor, textColor;
     if (isPressed) {
-        // Darker when pressed
-        bgColor = Color(255, 58, 58, 58);
-        borderColor = Color(255, 80, 80, 80);
-        textColor = Color(255, 220, 220, 220);
-        shadowColor = Color(60, 0, 0, 0);
-    } else if (isHovered) {
-        // Lighter on hover
-        bgColor = Color(255, 78, 78, 78);
-        borderColor = Color(255, 100, 100, 100);
-        textColor = Color(255, 255, 255, 255);
-        shadowColor = Color(50, 0, 0, 0);
+        bgColor = pressedColor;
+        borderColor = pressedBorder;
+        textColor = pressedText;
     } else {
-        // Default: (68,68,68) as requested
-        bgColor = Color(255, 68, 68, 68);
-        borderColor = Color(255, 85, 85, 85);
-        textColor = Color(255, 230, 230, 230);
-        shadowColor = Color(30, 0, 0, 0);
+        // Smooth interpolation between base and hover colors
+        BYTE bgR = static_cast<BYTE>(baseColor.GetRed() + (hoverColor.GetRed() - baseColor.GetRed()) * hoverAlpha);
+        BYTE bgG = static_cast<BYTE>(baseColor.GetGreen() + (hoverColor.GetGreen() - baseColor.GetGreen()) * hoverAlpha);
+        BYTE bgB = static_cast<BYTE>(baseColor.GetBlue() + (hoverColor.GetBlue() - baseColor.GetBlue()) * hoverAlpha);
+        bgColor = Color(255, bgR, bgG, bgB);
+        
+        BYTE borderR = static_cast<BYTE>(baseBorder.GetRed() + (hoverBorder.GetRed() - baseBorder.GetRed()) * hoverAlpha);
+        BYTE borderG = static_cast<BYTE>(baseBorder.GetGreen() + (hoverBorder.GetGreen() - baseBorder.GetGreen()) * hoverAlpha);
+        BYTE borderB = static_cast<BYTE>(baseBorder.GetBlue() + (hoverBorder.GetBlue() - baseBorder.GetBlue()) * hoverAlpha);
+        borderColor = Color(255, borderR, borderG, borderB);
+        
+        BYTE textR = static_cast<BYTE>(baseText.GetRed() + (hoverText.GetRed() - baseText.GetRed()) * hoverAlpha);
+        BYTE textG = static_cast<BYTE>(baseText.GetGreen() + (hoverText.GetGreen() - baseText.GetGreen()) * hoverAlpha);
+        BYTE textB = static_cast<BYTE>(baseText.GetBlue() + (hoverText.GetBlue() - baseText.GetBlue()) * hoverAlpha);
+        textColor = Color(255, textR, textG, textB);
+        
     }
     
     // Flat design - no gradient, just solid color
@@ -1011,8 +1127,8 @@ void Application::DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text,
     float radius = 4.0f;   // Smaller radius for flatter look
     float x = 0.5f;        // Half-pixel offset for crisp borders
     float y = 0.5f;        // Half-pixel offset for crisp borders
-    float width = (float)rect.right - 1.0f;
-    float height = (float)rect.bottom - 1.0f;
+    float width = static_cast<float>(rect.right) - 1.0f;
+    float height = static_cast<float>(rect.bottom) - 1.0f;
 
     GraphicsPath path;
 
@@ -1035,35 +1151,6 @@ void Application::DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text,
 
     path.CloseFigure();
 
-    // Only very subtle shadow for depth, no shadow when pressed
-    if (!isPressed) {
-        GraphicsPath shadowPath;
-        float shadowOffset = 1.0f;  // Minimal shadow offset for flat design
-        float sx = x + shadowOffset;
-        float sy = y + shadowOffset;
-        
-        // Create shadow path with same shape but offset coordinates
-        // Top-left corner shadow
-        shadowPath.AddArc(sx, sy, radius * 2.0f, radius * 2.0f, 180.0f, 90.0f);
-        // Top line shadow
-        shadowPath.AddLine(sx + radius, sy, sx + width - radius, sy);
-        // Top-right corner shadow
-        shadowPath.AddArc(sx + width - radius * 2.0f, sy, radius * 2.0f, radius * 2.0f, 270.0f, 90.0f);
-        // Right line shadow
-        shadowPath.AddLine(sx + width, sy + radius, sx + width, sy + height - radius);
-        // Bottom-right corner shadow
-        shadowPath.AddArc(sx + width - radius * 2.0f, sy + height - radius * 2.0f, radius * 2.0f, radius * 2.0f, 0.0f, 90.0f);
-        // Bottom line shadow
-        shadowPath.AddLine(sx + width - radius, sy + height, sx + radius, sy + height);
-        // Bottom-left corner shadow
-        shadowPath.AddArc(sx, sy + height - radius * 2.0f, radius * 2.0f, radius * 2.0f, 90.0f, 90.0f);
-        // Left line shadow (closes the shadow path)
-        shadowPath.AddLine(sx, sy + height - radius, sx, sy + radius);
-        shadowPath.CloseFigure();
-        
-        SolidBrush shadowBrush(shadowColor);
-        graphics.FillPath(&shadowBrush, &shadowPath);
-    }
     
     graphics.FillPath(&bgBrush, &path);
 
@@ -1076,25 +1163,64 @@ void Application::DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text,
     Font font(&fontFamily, 12, FontStyleRegular, UnitPoint);
     SolidBrush textBrush(textColor);
     
-    RectF textRect((REAL)rect.left, (REAL)rect.top, (REAL)(rect.right - rect.left), (REAL)(rect.bottom - rect.top));
+    RectF textRect(static_cast<REAL>(rect.left), static_cast<REAL>(rect.top), static_cast<REAL>(rect.right - rect.left), static_cast<REAL>(rect.bottom - rect.top));
     StringFormat stringFormat;
     stringFormat.SetAlignment(StringAlignmentCenter);
     stringFormat.SetLineAlignment(StringAlignmentCenter);
     
     graphics.DrawString(text.c_str(), -1, &font, textRect, &stringFormat, &textBrush);
+    
+    // Copy from memory DC to screen DC (double buffering)
+    BitBlt(hdc, 0, 0, rect.right - rect.left, rect.bottom - rect.top, memDC, 0, 0, SRCCOPY);
+    
+    // Clean up memory objects
+    SelectObject(memDC, oldBitmap);
+    DeleteObject(memBitmap);
+    DeleteDC(memDC);
 }
 
 bool Application::IsPointInButton(HWND hBtn, POINT pt) {
     RECT btnRect;
     GetWindowRect(hBtn, &btnRect);
-    ScreenToClient(m_hWnd, (LPPOINT)&btnRect.left);
-    ScreenToClient(m_hWnd, (LPPOINT)&btnRect.right);
+    ScreenToClient(m_hWnd, reinterpret_cast<LPPOINT>(&btnRect.left));
+    ScreenToClient(m_hWnd, reinterpret_cast<LPPOINT>(&btnRect.right));
     return PtInRect(&btnRect, pt);
 }
 
 void Application::InvalidateButton(HWND hBtn) {
-    InvalidateRect(hBtn, nullptr, FALSE);
+    // For owner-drawn buttons, we need to force a redraw
+    InvalidateRect(hBtn, nullptr, TRUE);
     UpdateWindow(hBtn);
+    
+    // Also force the parent window to redraw the button area
+    RECT btnRect;
+    GetWindowRect(hBtn, &btnRect);
+    ScreenToClient(m_hWnd, reinterpret_cast<LPPOINT>(&btnRect.left));
+    ScreenToClient(m_hWnd, reinterpret_cast<LPPOINT>(&btnRect.right));
+    InvalidateRect(m_hWnd, &btnRect, FALSE);
+}
+
+void Application::RedrawButtonDirect(HWND hBtn) {
+    // Use ValidateRect to prevent automatic background clearing
+    RECT rect;
+    GetClientRect(hBtn, &rect);
+    ValidateRect(hBtn, &rect);
+    
+    // Get button DC and draw directly without clearing background
+    HDC hdc = GetDC(hBtn);
+    if (hdc) {
+        // Get button text
+        wchar_t text[256];
+        GetWindowText(hBtn, text, 256);
+        
+        // Determine button state
+        bool isPressed = (m_pressedButton == hBtn);
+        
+        // Draw directly over existing content
+        DrawCustomButton(hdc, hBtn, text, isPressed);
+        
+        ReleaseDC(hBtn, hdc);
+    }
 }
 
 
@@ -1149,7 +1275,7 @@ void Application::DrawCard(HDC hdc, RECT rect, const std::wstring& title) {
         Font font(&fontFamily, 12, FontStyleBold, UnitPoint); // Bold font for better visibility
         SolidBrush textBrush(Color(255, 255, 255, 255));     // White text for better contrast
         
-        RectF titleRect((REAL)rect.left + 16, (REAL)rect.top + 6, (REAL)(rect.right - rect.left - 32), 24);
+        RectF titleRect(static_cast<REAL>(rect.left) + 16, static_cast<REAL>(rect.top) + 6, static_cast<REAL>(rect.right - rect.left - 32), 24);
         StringFormat stringFormat;
         stringFormat.SetAlignment(StringAlignmentNear);
         stringFormat.SetLineAlignment(StringAlignmentCenter);
@@ -1170,7 +1296,7 @@ void Application::DrawEditBorder(HWND hEdit) {
     
     // Draw dark border around edit control
     HPEN hPen = CreatePen(PS_SOLID, 1, RGB(64, 64, 64)); // Dark gray border
-    HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+    HPEN hOldPen = static_cast<HPEN>(SelectObject(hdc, hPen));
     
     // Draw border rectangle
     MoveToEx(hdc, rect.left - 1, rect.top - 1, nullptr);
@@ -1185,7 +1311,7 @@ void Application::DrawEditBorder(HWND hEdit) {
 }
 
 LRESULT CALLBACK Application::TreeCanvasSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
-    Application* pApp = (Application*)dwRefData;
+    Application* pApp = reinterpret_cast<Application*>(dwRefData);
     
     switch (uMsg) {
     case WM_MOUSEWHEEL:

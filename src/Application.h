@@ -3,7 +3,7 @@
 #include <windows.h>
 #include <string>
 #include <memory>
-#include <gdiplus.h>
+#include <map>
 
 class DirectoryTreeBuilder;
 class SystemTray;
@@ -31,12 +31,12 @@ private:
     void OnPaint();
     void OnCommand(int commandId);
     void OnKeyDown(WPARAM key, LPARAM flags);
-    void OnMouseMove(LPARAM lParam);
     void OnLButtonDown(LPARAM lParam);
     void OnLButtonUp(LPARAM lParam);
-    void DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text, bool isHovered, bool isPressed);
+    void DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text, bool isPressed);
     bool IsPointInButton(HWND hBtn, POINT pt);
     void InvalidateButton(HWND hBtn);
+    void RedrawButtonDirect(HWND hBtn);
     void DrawCard(HDC hdc, RECT rect, const std::wstring& title = L"");
     void DrawBackground(HDC hdc, RECT rect);
     void DrawEditBorder(HWND hEdit);
@@ -82,13 +82,22 @@ private:
     HWND m_hoveredButton;
     HWND m_pressedButton;
     
+    // Animation for smooth hover effects
+    std::map<HWND, float> m_buttonHoverAlpha;
+    UINT_PTR m_animationTimer;
+    
     // Dark theme brushes
     HBRUSH m_hBgBrush;
     HBRUSH m_hEditBrush;
     HBRUSH m_hStaticBrush;
     
+    // Fonts
+    HFONT m_hFont;
+    HFONT m_hMonoFont;
+    
     static const UINT_PTR STATUS_TIMER_ID = 1;
     static const UINT_PTR PATH_UPDATE_TIMER_ID = 2;
+    static const UINT_PTR ANIMATION_TIMER_ID = 3;
 
     static const int MIN_WIDTH = 600;
     static const int MIN_HEIGHT = 400;

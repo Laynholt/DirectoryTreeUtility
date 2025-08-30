@@ -3,7 +3,6 @@
 #include <windows.h>
 #include <shlobj.h>
 #include <string>
-#include <vector>
 
 class FileExplorerIntegration {
 public:

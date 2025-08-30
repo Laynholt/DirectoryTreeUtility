@@ -53,7 +53,7 @@ bool FileExplorerIntegration::IsExplorerWindowActive() {
 IShellWindows* FileExplorerIntegration::GetShellWindows() {
     IShellWindows* pShellWindows = nullptr;
     HRESULT hr = CoCreateInstance(CLSID_ShellWindows, nullptr, CLSCTX_ALL, 
-                                 IID_IShellWindows, (void**)&pShellWindows);
+                                 IID_IShellWindows, reinterpret_cast<void**>(&pShellWindows));
     
     return SUCCEEDED(hr) ? pShellWindows : nullptr;
 }
@@ -79,14 +79,14 @@ IWebBrowser2* FileExplorerIntegration::GetActiveExplorer() {
         
         if (SUCCEEDED(hr) && pDispatch) {
             IWebBrowser2* pWebBrowser = nullptr;
-            hr = pDispatch->QueryInterface(IID_IWebBrowser2, (void**)&pWebBrowser);
+            hr = pDispatch->QueryInterface(IID_IWebBrowser2, reinterpret_cast<void**>(&pWebBrowser));
             
             if (SUCCEEDED(hr) && pWebBrowser) {
                 SHANDLE_PTR hWndPtr = 0;
                 hr = pWebBrowser->get_HWND(&hWndPtr);
                 
                 if (SUCCEEDED(hr)) {
-                    HWND hExplorerWnd = (HWND)hWndPtr;
+                    HWND hExplorerWnd = reinterpret_cast<HWND>(hWndPtr);
                     
                     if (hExplorerWnd == hActivWnd || IsChild(hActivWnd, hExplorerWnd)) {
                         pActiveExplorer = pWebBrowser;
@@ -115,7 +115,7 @@ IWebBrowser2* FileExplorerIntegration::GetActiveExplorer() {
         HRESULT hr = pShellWindows->Item(index, &pDispatch);
         
         if (SUCCEEDED(hr) && pDispatch) {
-            hr = pDispatch->QueryInterface(IID_IWebBrowser2, (void**)&pActiveExplorer);
+            hr = pDispatch->QueryInterface(IID_IWebBrowser2, reinterpret_cast<void**>(&pActiveExplorer));
             pDispatch->Release();
         }
         

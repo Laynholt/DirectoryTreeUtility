@@ -1,6 +1,5 @@
 #include "DirectoryTreeBuilder.h"
 #include <algorithm>
-#include <iostream>
 
 const wchar_t* DirectoryTreeBuilder::TREE_BRANCH = L"├── ";
 const wchar_t* DirectoryTreeBuilder::TREE_LAST = L"└── ";
@@ -40,19 +39,6 @@ std::wstring DirectoryTreeBuilder::BuildTree(const std::wstring& rootPath, int m
     }
 }
 
-std::wstring DirectoryTreeBuilder::BuildTreeForSelected(const std::vector<std::wstring>& selectedPaths, int maxDepth) {
-    std::wstring result;
-    
-    for (const auto& path : selectedPaths) {
-        if (!result.empty()) {
-            result += L"\r\n\r\n";
-        }
-        result += BuildTree(path, maxDepth);
-    }
-    
-    return result;
-}
-
 TreeNode DirectoryTreeBuilder::BuildNodeTree(const std::filesystem::path& path, int currentDepth, int maxDepth) {
     TreeNode node(path.filename().wstring(), std::filesystem::is_directory(path));
     
@@ -64,9 +50,7 @@ TreeNode DirectoryTreeBuilder::BuildNodeTree(const std::filesystem::path& path, 
         std::vector<std::filesystem::directory_entry> entries;
         
         for (const auto& entry : std::filesystem::directory_iterator(path)) {
-            if (ShouldIncludePath(entry.path())) {
-                entries.push_back(entry);
-            }
+            entries.push_back(entry);
         }
         
         std::sort(entries.begin(), entries.end(), 
@@ -116,38 +100,4 @@ std::wstring DirectoryTreeBuilder::RenderTree(const TreeNode& node, const std::w
     }
     
     return result;
-}
-
-bool DirectoryTreeBuilder::ShouldIncludePath(const std::filesystem::path& path) {
-    std::wstring filename = path.filename().wstring();
-    
-    if (filename.empty() || filename[0] == L'.') {
-        if (filename == L"." || filename == L"..") {
-            return false;
-        }
-        return true;
-    }
-    
-    try {
-        if (std::filesystem::is_directory(path)) {
-            return true;
-        }
-        
-        if (std::filesystem::is_regular_file(path)) {
-            return true;
-        }
-    }
-    catch (const std::exception&) {
-        return false;
-    }
-    
-    return false;
-}
-
-std::wstring DirectoryTreeBuilder::GetTreeSymbol(bool isLast, bool hasChildren) {
-    if (isLast) {
-        return hasChildren ? TREE_LAST : TREE_LAST;
-    } else {
-        return hasChildren ? TREE_BRANCH : TREE_BRANCH;
-    }
 }

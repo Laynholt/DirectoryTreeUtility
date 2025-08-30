@@ -1,6 +1,7 @@
 #include "SystemTray.h"
 #include "Application.h"
 #include "resource.h"
+
 #include <windowsx.h>
 
 const wchar_t* TRAY_WINDOW_CLASS = L"DirectoryTreeUtilityTrayClass";
@@ -53,7 +54,7 @@ bool SystemTray::Initialize() {
         return false;
     }
 
-    SetWindowLongPtr(m_hTrayWnd, GWLP_USERDATA, (LONG_PTR)this);
+    SetWindowLongPtr(m_hTrayWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
     CreateTrayIcon();
     CreateContextMenu();
@@ -103,9 +104,10 @@ void SystemTray::CreateTrayIcon() {
 void SystemTray::CreateContextMenu() {
     m_hContextMenu = CreatePopupMenu();
     
-    AppendMenu(m_hContextMenu, MF_STRING, ID_SHOW, L"Показать");
-    AppendMenu(m_hContextMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenu(m_hContextMenu, MF_STRING, ID_EXIT, L"Выход");
+    // Create owner-drawn menu items for dark theme
+    AppendMenu(m_hContextMenu, MF_OWNERDRAW, ID_SHOW, reinterpret_cast<LPCWSTR>(ID_SHOW));
+    AppendMenu(m_hContextMenu, MF_OWNERDRAW | MF_SEPARATOR, ID_SEPARATOR, nullptr); // Custom separator
+    AppendMenu(m_hContextMenu, MF_OWNERDRAW, ID_EXIT, reinterpret_cast<LPCWSTR>(ID_EXIT));
 }
 
 void SystemTray::ShowContextMenu(int x, int y) {
@@ -113,20 +115,30 @@ void SystemTray::ShowContextMenu(int x, int y) {
     
     SetForegroundWindow(m_hTrayWnd);
     
+    // Set menu background color to match our dark theme
+    MENUINFO mi = {};
+    mi.cbSize = sizeof(MENUINFO);
+    mi.fMask = MIM_BACKGROUND;
+    mi.hbrBack = CreateSolidBrush(RGB(45, 45, 45)); // Dark background
+    SetMenuInfo(m_hContextMenu, &mi);
+    
     TrackPopupMenu(m_hContextMenu, TPM_RIGHTBUTTON, x, y, 0, m_hTrayWnd, nullptr);
+    
+    // Clean up brush
+    DeleteObject(mi.hbrBack);
     
     PostMessage(m_hTrayWnd, WM_NULL, 0, 0);
 }
 
 LRESULT CALLBACK SystemTray::TrayWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
-    SystemTray* pTray = (SystemTray*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
+    SystemTray* pTray = reinterpret_cast<SystemTray*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
     
     switch (message) {
     case WM_CREATE:
         {
-            CREATESTRUCT* pCreate = (CREATESTRUCT*)lParam;
-            pTray = (SystemTray*)pCreate->lpCreateParams;
-            SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)pTray);
+            CREATESTRUCT* pCreate = reinterpret_cast<CREATESTRUCT*>(lParam);
+            pTray = static_cast<SystemTray*>(pCreate->lpCreateParams);
+            SetWindowLongPtr(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pTray));
         }
         break;
 
@@ -153,6 +165,26 @@ LRESULT CALLBACK SystemTray::TrayWindowProc(HWND hWnd, UINT message, WPARAM wPar
         }
         break;
 
+    case WM_MEASUREITEM:
+        if (pTray) {
+            MEASUREITEMSTRUCT* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
+            if (mis->CtlType == ODT_MENU) {
+                pTray->MeasureMenuItem(mis);
+                return TRUE;
+            }
+        }
+        break;
+
+    case WM_DRAWITEM:
+        if (pTray) {
+            DRAWITEMSTRUCT* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+            if (dis->CtlType == ODT_MENU) {
+                pTray->DrawMenuItem(dis);
+                return TRUE;
+            }
+        }
+        break;
+
     case WM_COMMAND:
         if (pTray) {
             switch (LOWORD(wParam)) {
@@ -172,4 +204,103 @@ LRESULT CALLBACK SystemTray::TrayWindowProc(HWND hWnd, UINT message, WPARAM wPar
     }
     
     return 0;
+}
+
+void SystemTray::MeasureMenuItem(MEASUREITEMSTRUCT* mis) {
+    HDC hdc = GetDC(nullptr);
+    HFONT hFont = CreateFont(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    HFONT hOldFont = static_cast<HFONT>(SelectObject(hdc, hFont));
+    
+    // Handle separator
+    if (mis->itemID == ID_SEPARATOR) {
+        mis->itemWidth = 100;
+        mis->itemHeight = 3;
+        SelectObject(hdc, hOldFont);
+        DeleteObject(hFont);
+        ReleaseDC(nullptr, hdc);
+        return;
+    }
+    
+    std::wstring text;
+    switch (mis->itemID) {
+    case ID_SHOW:
+        text = L"Показать";
+        break;
+    case ID_EXIT:
+        text = L"Выход";
+        break;
+    }
+    
+    SIZE textSize;
+    GetTextExtentPoint32(hdc, text.c_str(), static_cast<int>(text.length()), &textSize);
+    
+    mis->itemWidth = textSize.cx + 40;  // Padding
+    mis->itemHeight = (textSize.cy + 8 > 24) ? textSize.cy + 8 : 24;  // Minimum height
+    
+    SelectObject(hdc, hOldFont);
+    DeleteObject(hFont);
+    ReleaseDC(nullptr, hdc);
+}
+
+void SystemTray::DrawMenuItem(DRAWITEMSTRUCT* dis) {
+    // Dark theme colors matching application
+    COLORREF bgColor = RGB(45, 45, 45);     // Card background
+    COLORREF hoverColor = RGB(68, 68, 68);  // Hover background
+    COLORREF textColor = RGB(255, 255, 255); // White text
+    
+    // Fill background
+    HBRUSH hBrush;
+    if (dis->itemState & ODS_SELECTED) {
+        hBrush = CreateSolidBrush(hoverColor);
+    } else {
+        hBrush = CreateSolidBrush(bgColor);
+    }
+    
+    FillRect(dis->hDC, &dis->rcItem, hBrush);
+    DeleteObject(hBrush);
+    
+    // Handle separator
+    if (dis->itemID == ID_SEPARATOR) {
+        // Draw gray separator line
+        HPEN hPen = CreatePen(PS_SOLID, 1, RGB(128, 128, 128)); // Gray color
+        HPEN hOldPen = static_cast<HPEN>(SelectObject(dis->hDC, hPen));
+        
+        int y = dis->rcItem.top + (dis->rcItem.bottom - dis->rcItem.top) / 2;
+        MoveToEx(dis->hDC, dis->rcItem.left + 10, y, nullptr);
+        LineTo(dis->hDC, dis->rcItem.right - 10, y);
+        
+        SelectObject(dis->hDC, hOldPen);
+        DeleteObject(hPen);
+        return;
+    }
+    
+    // Draw text
+    std::wstring text;
+    switch (dis->itemID) {
+    case ID_SHOW:
+        text = L"Показать";
+        break;
+    case ID_EXIT:
+        text = L"Выход";
+        break;
+    }
+    
+    if (!text.empty()) {
+        HFONT hFont = CreateFont(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                               CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+        HFONT hOldFont = static_cast<HFONT>(SelectObject(dis->hDC, hFont));
+        
+        SetTextColor(dis->hDC, textColor);
+        SetBkMode(dis->hDC, TRANSPARENT);
+        
+        RECT textRect = dis->rcItem;
+        textRect.left += 20;  // Left padding
+        DrawText(dis->hDC, text.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        
+        SelectObject(dis->hDC, hOldFont);
+        DeleteObject(hFont);
+    }
 }

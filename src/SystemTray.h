@@ -2,7 +2,6 @@
 
 #include <windows.h>
 #include <shellapi.h>
-#include <functional>
 
 class Application;
 
@@ -23,6 +22,8 @@ public:
 private:
     void CreateTrayIcon();
     void CreateContextMenu();
+    void MeasureMenuItem(MEASUREITEMSTRUCT* mis);
+    void DrawMenuItem(DRAWITEMSTRUCT* dis);
     
     Application* m_application;
     HWND m_hTrayWnd;
@@ -35,6 +36,7 @@ private:
     
     enum MenuItems {
         ID_SHOW = 1000,
-        ID_EXIT = 1001
+        ID_SEPARATOR = 1001,
+        ID_EXIT = 1002
     };
 };
