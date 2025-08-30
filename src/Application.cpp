@@ -359,7 +359,12 @@ void Application::Shutdown() {
 
 void Application::ShowWindow(bool show) {
     if (show) {
-        ::ShowWindow(m_hWnd, SW_SHOW);
+        if (IsIconic(m_hWnd)) {
+            ::ShowWindow(m_hWnd, SW_RESTORE);  // Restore from minimized state
+        } else {
+            ::ShowWindow(m_hWnd, SW_SHOW);     // Normal show
+        }
+        
         ::SetForegroundWindow(m_hWnd);
         m_isMinimized = false;
     } else {
@@ -369,7 +374,7 @@ void Application::ShowWindow(bool show) {
 }
 
 void Application::ToggleVisibility() {
-    if (m_isMinimized || !IsWindowVisible(m_hWnd)) {
+    if (m_isMinimized || !IsWindowVisible(m_hWnd) || IsIconic(m_hWnd)) {
         // Window is hidden or minimized - show it
         ShowWindow(true);
     } else if (GetForegroundWindow() == m_hWnd) {
@@ -972,13 +977,13 @@ void Application::DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text,
     Graphics graphics(hdc);
     graphics.SetSmoothingMode(SmoothingModeHighQuality);
     graphics.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
+    graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
     
     // Clear the background to prevent white corners
     graphics.Clear(Color(255, 45, 45, 45)); // Card background color
-    
+
     // Button colors as requested: (68,68,68) base color
     Color bgColor, borderColor, textColor, shadowColor;
-    
     if (isPressed) {
         // Darker when pressed
         bgColor = Color(255, 58, 58, 58);
@@ -1003,22 +1008,57 @@ void Application::DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text,
     SolidBrush bgBrush(bgColor);
     
     // Draw rounded rectangle with smaller radius for modern flat look
+    float radius = 4.0f;   // Smaller radius for flatter look
+    float x = 0.5f;        // Half-pixel offset for crisp borders
+    float y = 0.5f;        // Half-pixel offset for crisp borders
+    float width = (float)rect.right - 1.0f;
+    float height = (float)rect.bottom - 1.0f;
+
     GraphicsPath path;
-    int radius = 4;  // Smaller radius for flatter look
-    path.AddArc(0, 0, radius * 2, radius * 2, 180, 90);
-    path.AddArc(rect.right - radius * 2, 0, radius * 2, radius * 2, 270, 90);
-    path.AddArc(rect.right - radius * 2, rect.bottom - radius * 2, radius * 2, radius * 2, 0, 90);
-    path.AddArc(0, rect.bottom - radius * 2, radius * 2, radius * 2, 90, 90);
+
+    // Top-left corner
+    path.AddArc(x, y, radius * 2.0f, radius * 2.0f, 180.0f, 90.0f);
+    // Top line
+    path.AddLine(x + radius, y, x + width - radius, y);
+    // Top-right corner
+    path.AddArc(x + width - radius * 2.0f, y, radius * 2.0f, radius * 2.0f, 270.0f, 90.0f);
+    // Right line
+    path.AddLine(x + width, y + radius, x + width, y + height - radius);
+    // Bottom-right corner
+    path.AddArc(x + width - radius * 2.0f, y + height - radius * 2.0f, radius * 2.0f, radius * 2.0f, 0.0f, 90.0f);
+    // Bottom line
+    path.AddLine(x + width - radius, y + height, x + radius, y + height);
+    // Bottom-left corner
+    path.AddArc(x, y + height - radius * 2.0f, radius * 2.0f, radius * 2.0f, 90.0f, 90.0f);
+    // Left line (closes the path)
+    path.AddLine(x, y + height - radius, x, y + radius);
+
     path.CloseFigure();
-    
+
     // Only very subtle shadow for depth, no shadow when pressed
     if (!isPressed) {
         GraphicsPath shadowPath;
-        int shadowOffset = 1;  // Much smaller shadow
-        shadowPath.AddArc(shadowOffset, shadowOffset, radius * 2, radius * 2, 180, 90);
-        shadowPath.AddArc(rect.right - radius * 2 + shadowOffset, shadowOffset, radius * 2, radius * 2, 270, 90);
-        shadowPath.AddArc(rect.right - radius * 2 + shadowOffset, rect.bottom - radius * 2 + shadowOffset, radius * 2, radius * 2, 0, 90);
-        shadowPath.AddArc(shadowOffset, rect.bottom - radius * 2 + shadowOffset, radius * 2, radius * 2, 90, 90);
+        float shadowOffset = 1.0f;  // Minimal shadow offset for flat design
+        float sx = x + shadowOffset;
+        float sy = y + shadowOffset;
+        
+        // Create shadow path with same shape but offset coordinates
+        // Top-left corner shadow
+        shadowPath.AddArc(sx, sy, radius * 2.0f, radius * 2.0f, 180.0f, 90.0f);
+        // Top line shadow
+        shadowPath.AddLine(sx + radius, sy, sx + width - radius, sy);
+        // Top-right corner shadow
+        shadowPath.AddArc(sx + width - radius * 2.0f, sy, radius * 2.0f, radius * 2.0f, 270.0f, 90.0f);
+        // Right line shadow
+        shadowPath.AddLine(sx + width, sy + radius, sx + width, sy + height - radius);
+        // Bottom-right corner shadow
+        shadowPath.AddArc(sx + width - radius * 2.0f, sy + height - radius * 2.0f, radius * 2.0f, radius * 2.0f, 0.0f, 90.0f);
+        // Bottom line shadow
+        shadowPath.AddLine(sx + width - radius, sy + height, sx + radius, sy + height);
+        // Bottom-left corner shadow
+        shadowPath.AddArc(sx, sy + height - radius * 2.0f, radius * 2.0f, radius * 2.0f, 90.0f, 90.0f);
+        // Left line shadow (closes the shadow path)
+        shadowPath.AddLine(sx, sy + height - radius, sx, sy + radius);
         shadowPath.CloseFigure();
         
         SolidBrush shadowBrush(shadowColor);
@@ -1026,9 +1066,9 @@ void Application::DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text,
     }
     
     graphics.FillPath(&bgBrush, &path);
-    
+
     // Draw very subtle border
-    Pen borderPen(borderColor, 0.5f);  // Thinner border for flat design
+    Pen borderPen(borderColor, 1.0f);  // Thinner border for flat design
     graphics.DrawPath(&borderPen, &path);
     
     // Draw text with system font (matching HTML font-family)
@@ -1151,7 +1191,6 @@ LRESULT CALLBACK Application::TreeCanvasSubclassProc(HWND hWnd, UINT uMsg, WPARA
     case WM_MOUSEWHEEL:
         {
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-            Application* pApp = (Application*)dwRefData;
             if (pApp) {
                 pApp->HandleMouseWheelScroll(delta);
             }
