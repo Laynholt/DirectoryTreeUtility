@@ -9,18 +9,9 @@ BOOL CALLBACK EnumWindowsProc(HWND hWnd, LPARAM lParam) {
     wchar_t className[256];
     if (GetClassName(hWnd, className, 256) > 0) {
         if (wcscmp(className, WINDOW_CLASS_NAME) == 0) {
-            // Found existing window - bring it to front
-            if (IsIconic(hWnd)) {
-                ShowWindow(hWnd, SW_RESTORE);
-            } else if (!IsWindowVisible(hWnd)) {
-                // Window is hidden (in tray) - show it
-                ShowWindow(hWnd, SW_SHOW);
-            }
-            
-            // Force window to foreground
-            SetForegroundWindow(hWnd);
-            SetActiveWindow(hWnd);
-            BringWindowToTop(hWnd);
+            // Found existing window - send message to show it properly
+            // This will use Application::ShowWindow() method which handles m_isMinimized flag
+            PostMessage(hWnd, WM_ACTIVATE_INSTANCE, 0, 0);
             
             return FALSE; // Stop enumeration
         }

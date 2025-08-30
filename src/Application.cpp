@@ -20,6 +20,7 @@ using namespace Gdiplus;
 
 const wchar_t* WINDOW_CLASS = L"DirectoryTreeUtilityClass";
 const wchar_t* WINDOW_TITLE = L"Directory Tree Utility";
+const UINT WM_ACTIVATE_INSTANCE = WM_USER + 200;
 
 enum ControlIDs {
     ID_DEPTH_EDIT = 1001,
@@ -274,26 +275,6 @@ int Application::Run() {
                 else if (msg.wParam == 'S' && (GetKeyState(VK_CONTROL) & 0x8000)) {
                     SaveToFile();
                     continue;
-                }
-                else if (msg.wParam >= VK_LEFT && msg.wParam <= VK_DOWN) {
-                    // Arrow keys for scrolling canvas when not in depth edit
-                    if (msg.hwnd != m_hDepthEdit && GetFocus() != m_hDepthEdit) {
-                        switch (msg.wParam) {
-                        case VK_UP:
-                            ScrollCanvas(0);
-                            break;
-                        case VK_DOWN:
-                            ScrollCanvas(1);
-                            break;
-                        case VK_LEFT:
-                            ScrollCanvas(2);
-                            break;
-                        case VK_RIGHT:
-                            ScrollCanvas(3);
-                            break;
-                        }
-                        continue;
-                    }
                 }
                 else if (msg.wParam >= '0' && msg.wParam <= '9' && msg.hwnd != m_hDepthEdit) {
                     // Number input - redirect to depth edit
@@ -550,13 +531,6 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         OnKeyDown(wParam, lParam);
         break;
         
-    case WM_CHAR:
-        // Handle character input for depth edit when any control has focus
-        if (wParam >= L'0' && wParam <= L'9') {
-            OnKeyDown(wParam, lParam);
-        }
-        break;
-        
     case WM_MOUSEWHEEL:
         {
             // Get mouse position and check if it's over the tree canvas
@@ -655,6 +629,11 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         }
         break;
 
+    case WM_ACTIVATE_INSTANCE:
+        // Another instance tried to start - show this window properly
+        ShowWindow(true);
+        break;
+
     default:
         return DefWindowProc(m_hWnd, message, wParam, lParam);
     }
@@ -731,54 +710,16 @@ void Application::OnKeyDown(WPARAM key, LPARAM) {
     HWND hFocused = GetFocus();
 
     switch (key) {
-    case VK_ESCAPE:
-        SetFocus(m_hWnd);
-        break;
-    case VK_RETURN:
-        GenerateTree();
-        break;
-    case 'C':
-        if (GetKeyState(VK_CONTROL) & 0x8000) {
-            CopyToClipboard();
-        }
-        break;
-    case 'S':
-        if (GetKeyState(VK_CONTROL) & 0x8000) {
-            SaveToFile();
-        }
-        break;
     case VK_BACK:
         if (hFocused != m_hDepthEdit) {
             SetFocus(m_hDepthEdit);
         }
-        if (GetKeyState(VK_SHIFT) & 0x8000) {
-            SetWindowText(m_hDepthEdit, L"1");
-            m_isDefaultDepthValue = true;
-        } else {
-            wchar_t buffer[32];
-            GetWindowText(m_hDepthEdit, buffer, 32);
-            int len = static_cast<int>(wcslen(buffer));
-            if (len > 0) {
-                buffer[len - 1] = L'\0';
-                if (wcslen(buffer) == 0) {
-                    wcscpy_s(buffer, L"1");
-                    m_isDefaultDepthValue = true;
-                } else {
-                    m_isDefaultDepthValue = false;
-                }
-                SetWindowText(m_hDepthEdit, buffer);
-            }
-        }
+        // Send message to depth edit subclass for processing
+        SendMessage(m_hDepthEdit, WM_CHAR, VK_BACK, 0);
         break;
     case VK_OEM_MINUS:
-        {
-            wchar_t buffer[32];
-            GetWindowText(m_hDepthEdit, buffer, 32);
-            int value = _wtoi(buffer);
-            swprintf_s(buffer, 32, L"%d", -value);
-            SetWindowText(m_hDepthEdit, buffer);
-            m_isDefaultDepthValue = false;
-        }
+        // Send message to depth edit subclass for processing
+        SendMessage(m_hDepthEdit, WM_CHAR, VK_OEM_MINUS, 0);
         break;
     case VK_UP:
         ScrollCanvas(0);
@@ -793,30 +734,6 @@ void Application::OnKeyDown(WPARAM key, LPARAM) {
         ScrollCanvas(3);
         break;
     default:
-        if (key >= '0' && key <= '9' && hFocused != m_hDepthEdit) {
-            // Only handle number input if depth edit is not focused
-            SetFocus(m_hDepthEdit);
-            wchar_t buffer[32];
-            GetWindowText(m_hDepthEdit, buffer, 32);
-            
-            // If it's the default value "1" and user types a different digit, replace it
-            if (m_isDefaultDepthValue && wcscmp(buffer, L"1") == 0 && key != '1') {
-                swprintf_s(buffer, 32, L"%c", static_cast<wchar_t>(key));
-                m_isDefaultDepthValue = false;
-            }
-            // If it's empty or zero, just set the digit
-            else if (wcslen(buffer) == 0 || (wcslen(buffer) == 1 && buffer[0] == L'0')) {
-                swprintf_s(buffer, 32, L"%c", static_cast<wchar_t>(key));
-                m_isDefaultDepthValue = false;
-            }
-            // Otherwise append the digit
-            else {
-                wchar_t newChar[2] = { static_cast<wchar_t>(key), L'\0' };
-                wcscat_s(buffer, 32, newChar);
-                m_isDefaultDepthValue = false;
-            }
-            SetWindowText(m_hDepthEdit, buffer);
-        }
         break;
     }
 }
@@ -1351,7 +1268,7 @@ LRESULT CALLBACK Application::DepthEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM
     case WM_CHAR:
         {
             wchar_t ch = static_cast<wchar_t>(wParam);
-            if (ch == L'-') {
+            if (ch == L'-' || ch == VK_OEM_MINUS) {
                 // Handle minus key - toggle sign of the number
                 wchar_t buffer[32];
                 GetWindowText(hWnd, buffer, 32);
@@ -1360,7 +1277,10 @@ LRESULT CALLBACK Application::DepthEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM
                 SetWindowText(hWnd, buffer);
                 pApp->m_isDefaultDepthValue = false;
                 pApp->m_hasGeneratedTree = false;
+                // Return focus to main window after processing
+                SetFocus(pApp->m_hWnd);
                 return 0; // Don't let the default handler process this
+
             } else if (ch == VK_BACK) {
                 // Handle backspace key
                 if (GetKeyState(VK_SHIFT) & 0x8000) {
@@ -1370,6 +1290,7 @@ LRESULT CALLBACK Application::DepthEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM
                     pApp->m_hasGeneratedTree = false;
                     // Select all text so user can see what happened
                     SendMessage(hWnd, EM_SETSEL, 0, -1);
+
                 } else {
                     // Regular Backspace: delete character before cursor
                     wchar_t buffer[32];
@@ -1387,7 +1308,10 @@ LRESULT CALLBACK Application::DepthEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM
                     }
                     pApp->m_hasGeneratedTree = false;
                 }
+                // Return focus to main window after processing
+                SetFocus(pApp->m_hWnd);
                 return 0; // Don't let the default handler process this
+
             } else if (ch >= L'0' && ch <= L'9') {
                 // Handle number input
                 wchar_t buffer[32];
