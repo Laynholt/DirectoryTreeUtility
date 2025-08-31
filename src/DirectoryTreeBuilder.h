@@ -13,6 +13,9 @@ struct TreeNode {
     
     TreeNode(const std::wstring& nodeName, bool isDir) 
         : name(nodeName), isDirectory(isDir) {}
+    
+    TreeNode(std::wstring&& nodeName, bool isDir) 
+        : name(std::move(nodeName)), isDirectory(isDir) {}
 };
 
 class DirectoryTreeBuilder {

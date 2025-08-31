@@ -26,13 +26,13 @@ std::wstring DirectoryTreeBuilder::BuildTree(const std::wstring& rootPath, int m
         }
 
         int processedCount = 0;
-        TreeNode root = BuildNodeTree(path, 0, maxDepth, shouldCancel, progressCallback, processedCount);
+        TreeNode root{BuildNodeTree(path, 0, maxDepth, shouldCancel, progressCallback, processedCount)};
         
         if (shouldCancel && shouldCancel()) {
             return L"Операция отменена";
         }
 
-        std::wstring result = path.filename().wstring();
+        std::wstring result{path.filename().wstring()};
         if (result.empty()) {
             result = path.wstring();
         }
@@ -89,8 +89,8 @@ TreeNode DirectoryTreeBuilder::BuildNodeTree(const std::filesystem::path& path, 
                          return aIsDir > bIsDir;
                      }
                      
-                     std::wstring aName = a.path().filename().wstring();
-                     std::wstring bName = b.path().filename().wstring();
+                     std::wstring aName{a.path().filename().wstring()};
+                     std::wstring bName{b.path().filename().wstring()};
                      std::transform(aName.begin(), aName.end(), aName.begin(), ::towlower);
                      std::transform(bName.begin(), bName.end(), bName.begin(), ::towlower);
                      
@@ -103,14 +103,15 @@ TreeNode DirectoryTreeBuilder::BuildNodeTree(const std::filesystem::path& path, 
                 return node;
             }
             
-            TreeNode child = BuildNodeTree(entry.path(), currentDepth + 1, maxDepth, 
-                                               shouldCancel, progressCallback, processedCount);
-            node.children.push_back(std::move(child));
+            node.children.emplace_back(BuildNodeTree(entry.path(), currentDepth + 1, maxDepth, 
+                                                         shouldCancel, progressCallback, processedCount));
             
             // Update progress
             ++processedCount;
             if (progressCallback && processedCount % 10 == 0) { // Report progress every 10 items
-                std::wstring progress = L"Обработано элементов: " + std::to_wstring(processedCount);
+                std::wstring progress{L"Обработано элементов: "};
+                progress.reserve(progress.length() + 10); // Reserve space for number
+                progress += std::to_wstring(processedCount);
                 progressCallback(progress);
             }
         }
@@ -133,7 +134,7 @@ std::wstring DirectoryTreeBuilder::RenderTree(const TreeNode& node, const std::w
     }
     result += L"\r\n";
     
-    std::wstring newPrefix = prefix + (isLast ? TREE_SPACE : TREE_VERTICAL);
+    std::wstring newPrefix{prefix + (isLast ? TREE_SPACE : TREE_VERTICAL)};
     
     for (size_t i = 0; i < node.children.size(); ++i) {
         bool childIsLast = (i == node.children.size() - 1);

@@ -798,12 +798,13 @@ void Application::GenerateTreeAsync() {
                 // Post completion message to UI thread
                 std::lock_guard<std::mutex> lock(m_treeMutex);
                 
-                // Shrink m_treeContent capacity if new tree is significantly smaller (4x smaller)
-                if (m_treeContent.capacity() > 4 * result.capacity()) {
-                    m_treeContent.shrink_to_fit();
+                size_t oldCapacity = m_treeContent.capacity();
+                m_treeContent = std::move(result);
+
+                // If old tree was significantly larger (4x larger), flag canvas cleanup
+                if (oldCapacity > 4 * m_treeContent.capacity()) {
                     m_shouldCleanupCanvas = true; // Flag to cleanup canvas memory
                 }
-                m_treeContent = result;
 
                 PostMessage(m_hWnd, WM_TREE_COMPLETED, 0, 0);
             }
