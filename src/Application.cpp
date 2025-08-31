@@ -56,6 +56,7 @@ Application::Application()
     , m_hMonoFont(nullptr)
     , m_cancelGeneration(false)
     , m_isGenerating(false)
+    , m_isSaving(false)
     , m_animationStep(0) {
     
     // Initialize dark theme brushes
@@ -310,6 +311,11 @@ void Application::Shutdown() {
     if (m_systemTray) {
         m_systemTray->Cleanup();
         m_systemTray.reset();
+    }
+    
+    // Wait for save thread to complete
+    if (m_saveThread.joinable()) {
+        m_saveThread.join();
     }
     
     if (m_treeBuilder) {
@@ -568,7 +574,10 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 
     case WM_TIMER:
         if (wParam == STATUS_TIMER_ID) {
-            SetWindowText(m_hStatusLabel, L"Готово");
+            // Don't reset status if we're still generating or saving
+            if (!m_isGenerating.load() && !m_isSaving.load()) {
+                SetWindowText(m_hStatusLabel, L"Готово");
+            }
             KillTimer(m_hWnd, STATUS_TIMER_ID);
         }
         else if (wParam == PATH_UPDATE_TIMER_ID) {
@@ -626,6 +635,18 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         {
             std::wstring* errorMsg = reinterpret_cast<std::wstring*>(lParam);
             OnTreeGenerationError(*errorMsg);
+            delete errorMsg;
+        }
+        break;
+
+    case WM_SAVE_COMPLETED:
+        OnSaveCompleted();
+        break;
+        
+    case WM_SAVE_ERROR:
+        {
+            std::wstring* errorMsg = reinterpret_cast<std::wstring*>(lParam);
+            OnSaveError(*errorMsg);
             delete errorMsg;
         }
         break;
@@ -781,10 +802,11 @@ void Application::GenerateTreeAsync() {
     
     m_generationThread = std::thread([this, currentPath, depth]() {
         try {
-            // Generate tree with cancellation support
+            // Generate tree with cancellation support (always TEXT format for display)
             std::wstring result = m_treeBuilder->BuildTree(
                 currentPath, 
                 depth,
+                TreeFormat::TEXT,
                 [this]() { return m_cancelGeneration.load(); },
                 [this](const std::wstring& progress) {
                     // Post progress update to UI thread
@@ -893,6 +915,13 @@ void Application::UpdateProgressAnimation() {
     }
     
     SetWindowText(m_hTreeCanvas, message.c_str());
+    
+    // Also update status bar with persistent message
+    std::wstring statusMessage = L"Построение дерева";
+    for (int i = 0; i < m_animationStep; i++) {
+        statusMessage += L".";
+    }
+    ShowPersistentStatusMessage(statusMessage);
 }
 
 void Application::CopyToClipboard() {
@@ -926,7 +955,7 @@ void Application::SaveToFile() {
     ofn.hwndOwner = m_hWnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t);
-    ofn.lpstrFilter = L"Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFilter = L"Text Files (*.txt)\0*.txt\0JSON Files (*.json)\0*.json\0XML Files (*.xml)\0*.xml\0";
     ofn.nFilterIndex = 1;
     ofn.lpstrFileTitle = nullptr;
     ofn.nMaxFileTitle = 0;
@@ -936,26 +965,112 @@ void Application::SaveToFile() {
     if (GetSaveFileName(&ofn)) {
         std::wstring fileName(szFile);
         
-        // Add .txt extension if not present
-        if (fileName.length() < 4 || fileName.substr(fileName.length() - 4) != L".txt") {
-            fileName += L".txt";
+        // Determine format based on filter index
+        TreeFormat format = TreeFormat::TEXT;
+        std::wstring expectedExt = L".txt";
+        
+        switch (ofn.nFilterIndex) {
+            case 2: // JSON
+                format = TreeFormat::JSON;
+                expectedExt = L".json";
+                break;
+            case 3: // XML
+                format = TreeFormat::XML;
+                expectedExt = L".xml";
+                break;
+            default: // Text
+                format = TreeFormat::TEXT;
+                expectedExt = L".txt";
+                break;
         }
         
-        HANDLE hFile = CreateFile(fileName.c_str(), GENERIC_WRITE, 0, nullptr,
-                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (hFile != INVALID_HANDLE_VALUE) {
-            DWORD bytesWritten;
-            std::string utf8Content;
-            int utf8Length = WideCharToMultiByte(CP_UTF8, 0, m_treeContent.c_str(), -1, nullptr, 0, nullptr, nullptr);
-            if (utf8Length > 0) {
-                utf8Content.resize(utf8Length - 1);
-                WideCharToMultiByte(CP_UTF8, 0, m_treeContent.c_str(), -1, &utf8Content[0], utf8Length, nullptr, nullptr);
-            }
-            WriteFile(hFile, utf8Content.c_str(), static_cast<DWORD>(utf8Content.length()), &bytesWritten, nullptr);
-            CloseHandle(hFile);
-            ShowStatusMessage(L"Файл сохранен");
+        // Add appropriate extension if not present
+        if (fileName.length() < expectedExt.length() || 
+            fileName.substr(fileName.length() - expectedExt.length()) != expectedExt) {
+            fileName += expectedExt;
+        }
+        
+        if (format == TreeFormat::TEXT) {
+            // Synchronous save for text format (use existing content)
+            SaveFileSync(std::move(fileName), m_treeContent);
+        } else {
+            // Asynchronous save for JSON/XML formats (need to generate content)
+            SaveFileAsync(std::move(fileName), format);
         }
     }
+}
+
+void Application::SaveFileSync(std::wstring&& fileName, const std::wstring& content) {
+    HANDLE hFile = CreateFile(fileName.c_str(), GENERIC_WRITE, 0, nullptr,
+                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        DWORD bytesWritten;
+        int utf8Length = WideCharToMultiByte(CP_UTF8, 0, content.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        if (utf8Length > 0) {
+            std::string utf8Content(utf8Length - 1, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, content.c_str(), -1, &utf8Content[0], utf8Length, nullptr, nullptr);
+            WriteFile(hFile, utf8Content.c_str(), static_cast<DWORD>(utf8Content.length()), &bytesWritten, nullptr);
+        }
+        CloseHandle(hFile);
+        ShowStatusMessage(L"Файл сохранен");
+    }
+}
+
+void Application::SaveFileAsync(std::wstring&& fileName, TreeFormat format) {
+    if (m_isSaving.load()) return; // Already saving
+    
+    m_isSaving = true;
+    ShowPersistentStatusMessage(L"Сохранение файла...");
+    
+    // Get generation parameters
+    wchar_t depthBuffer[32];
+    GetWindowText(m_hDepthEdit, depthBuffer, 32);
+    int depth = _wtoi(depthBuffer);
+    std::wstring currentPath = GetCurrentWorkingPath();
+    
+    // Join previous save thread if exists
+    if (m_saveThread.joinable()) {
+        m_saveThread.join();
+    }
+    
+    m_saveThread = std::thread([this, fileName = std::move(fileName), format, currentPath = std::move(currentPath), depth]() {
+        try {
+            // Generate content in requested format
+            std::wstring content = m_treeBuilder->BuildTree(currentPath, depth, format);
+            
+            // Save to file
+            HANDLE hFile = CreateFile(fileName.c_str(), GENERIC_WRITE, 0, nullptr,
+                                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hFile != INVALID_HANDLE_VALUE) {
+                DWORD bytesWritten;
+                int utf8Length = WideCharToMultiByte(CP_UTF8, 0, content.c_str(), -1, nullptr, 0, nullptr, nullptr);
+                if (utf8Length > 0) {
+                    std::string utf8Content(utf8Length - 1, '\0');
+                    WideCharToMultiByte(CP_UTF8, 0, content.c_str(), -1, &utf8Content[0], utf8Length, nullptr, nullptr);
+                    WriteFile(hFile, utf8Content.c_str(), static_cast<DWORD>(utf8Content.length()), &bytesWritten, nullptr);
+                }
+                CloseHandle(hFile);
+                PostMessage(m_hWnd, WM_SAVE_COMPLETED, 0, 0);
+            } else {
+                PostMessage(m_hWnd, WM_SAVE_ERROR, 0, reinterpret_cast<LPARAM>(new std::wstring(L"Ошибка создания файла")));
+            }
+        }
+        catch (const std::exception& e) {
+            std::wstring error = L"Ошибка сохранения: ";
+            error += std::wstring(e.what(), e.what() + strlen(e.what()));
+            PostMessage(m_hWnd, WM_SAVE_ERROR, 0, reinterpret_cast<LPARAM>(new std::wstring(error)));
+        }
+    });
+}
+
+void Application::OnSaveCompleted() {
+    m_isSaving = false;
+    ShowStatusMessage(L"Файл сохранен");
+}
+
+void Application::OnSaveError(const std::wstring& error) {
+    m_isSaving = false;
+    ShowStatusMessage(error);
 }
 
 void Application::UpdateCurrentPath() {
@@ -967,6 +1082,11 @@ void Application::UpdateCurrentPath() {
 void Application::ShowStatusMessage(const std::wstring& message) {
     SetWindowText(m_hStatusLabel, message.c_str());
     SetTimer(m_hWnd, STATUS_TIMER_ID, 3000, nullptr); // Hide after 3 seconds
+}
+
+void Application::ShowPersistentStatusMessage(const std::wstring& message) {
+    SetWindowText(m_hStatusLabel, message.c_str());
+    // Don't set timer - message will persist until explicitly changed
 }
 
 

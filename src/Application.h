@@ -12,6 +12,7 @@
 class DirectoryTreeBuilder;
 class SystemTray;
 class GlobalHotkeys;
+enum class TreeFormat;
 
 class Application {
 public:
@@ -52,11 +53,16 @@ private:
     void CancelGeneration();
     void OnTreeGenerationCompleted(const std::wstring& result);
     void OnTreeGenerationError(const std::wstring& error);
+    void OnSaveCompleted();
+    void OnSaveError(const std::wstring& error);
     void UpdateProgressAnimation();
     void CopyToClipboard();
     void SaveToFile();
+    void SaveFileSync(std::wstring&& fileName, const std::wstring& content);
+    void SaveFileAsync(std::wstring&& fileName, TreeFormat format);
     void UpdateCurrentPath();
     void ShowStatusMessage(const std::wstring& message);
+    void ShowPersistentStatusMessage(const std::wstring& message);
     void ScrollCanvas(int direction); // 0=up, 1=down, 2=left, 3=right
     std::wstring GetCurrentWorkingPath();
     void HandleMouseWheelScroll(int delta);
@@ -86,8 +92,10 @@ private:
     
     // Multithreading support
     std::thread m_generationThread;
+    std::thread m_saveThread;
     std::atomic<bool> m_cancelGeneration;
     std::atomic<bool> m_isGenerating;
+    std::atomic<bool> m_isSaving;
     std::mutex m_treeMutex;
     int m_animationStep;
     
@@ -116,6 +124,8 @@ private:
     
     static const UINT WM_TREE_COMPLETED = WM_USER + 100;
     static const UINT WM_TREE_ERROR = WM_USER + 101;
+    static const UINT WM_SAVE_COMPLETED = WM_USER + 102;
+    static const UINT WM_SAVE_ERROR = WM_USER + 103;
 
     static const int MIN_WIDTH = 600;
     static const int MIN_HEIGHT = 400;
