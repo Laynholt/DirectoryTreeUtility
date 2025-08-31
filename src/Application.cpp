@@ -44,6 +44,7 @@ Application::Application()
     , m_isMinimized(false)
     , m_isDefaultDepthValue(true)
     , m_hasGeneratedTree(false)
+    , m_shouldCleanupCanvas(false)
     , m_gdiplusToken(0)
     , m_hoveredButton(nullptr)
     , m_pressedButton(nullptr)
@@ -750,6 +751,9 @@ void Application::GenerateTree() {
 }
 
 void Application::GenerateTreeAsync() {
+    // Clear previous tree content from memory
+    m_treeContent.clear();
+    
     // Mark as generating
     m_isGenerating = true;
     m_cancelGeneration = false;
@@ -778,7 +782,7 @@ void Application::GenerateTreeAsync() {
     m_generationThread = std::thread([this, currentPath, depth]() {
         try {
             // Generate tree with cancellation support
-            std::wstring result = m_treeBuilder->BuildTreeAsync(
+            std::wstring result = m_treeBuilder->BuildTree(
                 currentPath, 
                 depth,
                 [this]() { return m_cancelGeneration.load(); },
@@ -793,7 +797,14 @@ void Application::GenerateTreeAsync() {
             if (!m_cancelGeneration) {
                 // Post completion message to UI thread
                 std::lock_guard<std::mutex> lock(m_treeMutex);
+                
+                // Shrink m_treeContent capacity if new tree is significantly smaller (4x smaller)
+                if (m_treeContent.capacity() > 4 * result.capacity()) {
+                    m_treeContent.shrink_to_fit();
+                    m_shouldCleanupCanvas = true; // Flag to cleanup canvas memory
+                }
                 m_treeContent = result;
+
                 PostMessage(m_hWnd, WM_TREE_COMPLETED, 0, 0);
             }
         }
@@ -830,6 +841,12 @@ void Application::OnTreeGenerationCompleted(const std::wstring& result) {
     UNREFERENCED_PARAMETER(result);
     // Stop progress animation
     KillTimer(m_hWnd, PROGRESS_TIMER_ID);
+    
+    // Cleanup canvas memory if flagged
+    if (m_shouldCleanupCanvas) {
+        CleanupCanvasMemory();
+        m_shouldCleanupCanvas = false; // Reset flag
+    }
     
     // Update UI first
     SetWindowText(m_hTreeCanvas, m_treeContent.c_str());
@@ -1456,3 +1473,37 @@ void Application::HandleMouseWheelScroll(int delta) {
         }
     }
 }
+
+void Application::CleanupCanvasMemory() {
+    if (!m_hTreeCanvas) return;
+    
+    // Get current edit control memory handle
+    HLOCAL hOrgMem = reinterpret_cast<HLOCAL>(SendMessage(m_hTreeCanvas, EM_GETHANDLE, 0, 0));
+    if (!hOrgMem) return;
+    
+    SIZE_T sizeUsed = LocalSize(hOrgMem);
+    
+    // Calculate character size (always WCHAR for our case since we use UNICODE)
+    int cbCh = sizeof(WCHAR);
+    
+    // Get current text length
+    int textLength = GetWindowTextLength(m_hTreeCanvas);
+    
+    // Check if we should reduce size of buffer
+    if (sizeUsed > m_treeContent.capacity() && (static_cast<SIZE_T>(textLength * cbCh) < m_treeContent.capacity())) {
+        // Reallocate memory to smaller size
+        HLOCAL hNewMem = reinterpret_cast<HLOCAL>(LocalReAlloc(hOrgMem, m_treeContent.capacity(), LMEM_MOVEABLE));
+        if (hNewMem) {
+            // Zero full buffer for security
+            LPVOID pNewMem = LocalLock(hNewMem);
+            if (pNewMem) {
+                memset(pNewMem, 0, m_treeContent.capacity());
+                LocalUnlock(hNewMem);
+            }
+            
+            // Set new memory handle - reduces process memory
+            SendMessage(m_hTreeCanvas, EM_SETHANDLE, reinterpret_cast<WPARAM>(hNewMem), 0);
+        }
+    }
+}
+

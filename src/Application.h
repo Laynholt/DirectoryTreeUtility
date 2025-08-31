@@ -60,6 +60,7 @@ private:
     void ScrollCanvas(int direction); // 0=up, 1=down, 2=left, 3=right
     std::wstring GetCurrentWorkingPath();
     void HandleMouseWheelScroll(int delta);
+    void CleanupCanvasMemory(); // Cleanup edit control memory
 
     HINSTANCE m_hInstance;
     HWND m_hWnd;
@@ -80,6 +81,7 @@ private:
     bool m_isMinimized;
     bool m_isDefaultDepthValue;
     bool m_hasGeneratedTree;  // Flag to track if tree was generated
+    bool m_shouldCleanupCanvas; // Flag to trigger canvas memory cleanup
     std::wstring m_lastKnownPath;
     
     // Multithreading support
