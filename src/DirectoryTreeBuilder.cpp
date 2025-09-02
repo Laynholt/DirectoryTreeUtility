@@ -146,7 +146,7 @@ std::wstring DirectoryTreeBuilder::RenderTree(const TreeNode& node, const std::w
     result += prefix;
     result += isLast ? TREE_LAST : TREE_BRANCH;
     result += node.name;
-    if (node.isDirectory && !node.children.empty()) {
+    if (node.isDirectory) {
         result += L"/";
     }
     result += L"\r\n";
