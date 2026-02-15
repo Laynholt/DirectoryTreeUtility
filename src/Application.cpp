@@ -11,6 +11,7 @@
 #include <windowsx.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <richedit.h>
 #include <gdiplus.h>
 #include <uxtheme.h>
 
@@ -23,6 +24,8 @@ using namespace Gdiplus;
 
 const wchar_t* WINDOW_CLASS = L"DirectoryTreeUtilityClass";
 const wchar_t* WINDOW_TITLE = L"Directory Tree Utility";
+const wchar_t* INFO_WINDOW_CLASS = L"DirectoryTreeUtilityInfoWindowClass";
+const wchar_t* APP_VERSION = L"1.3.0";
 const UINT WM_ACTIVATE_INSTANCE = WM_USER + 200;
 
 enum ControlIDs {
@@ -31,8 +34,111 @@ enum ControlIDs {
     ID_GENERATE_BTN = 1003,
     ID_COPY_BTN = 1004,
     ID_SAVE_BTN = 1005,
-    ID_TREE_CANVAS = 1006
+    ID_HELP_BTN = 1006,
+    ID_TREE_CANVAS = 1007,
+    ID_INFO_TEXT = 1008,
+    ID_INFO_CLOSE = 1009,
+    ID_MENU_HELP_HOTKEYS = 2001,
+    ID_MENU_HELP_ABOUT = 2002
 };
+
+namespace {
+struct InfoWindowState {
+    Application* owner;
+    int kind;
+    HWND textControl;
+    HWND closeButton;
+    std::wstring text;
+    HFONT font;
+    HBRUSH editBrush;
+    bool useRichText;
+};
+
+HMODULE g_richEditModule = nullptr;
+
+const wchar_t* GetHelpMenuItemText(UINT itemId) {
+    switch (itemId) {
+    case ID_MENU_HELP_HOTKEYS:
+        return L"Горячие клавиши...";
+    case ID_MENU_HELP_ABOUT:
+        return L"О программе...";
+    default:
+        return nullptr;
+    }
+}
+
+const wchar_t* GetMenuItemText(UINT itemId, ULONG_PTR itemData) {
+    if (itemData != 0) {
+        return reinterpret_cast<const wchar_t*>(itemData);
+    }
+
+    return GetHelpMenuItemText(itemId);
+}
+
+void ApplyHotkeysFormatting(HWND richEdit, const std::wstring& text) {
+    // RichEdit stores line breaks as '\r', so normalize text for correct selection offsets.
+    std::wstring richText;
+    richText.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == L'\r' && (i + 1) < text.size() && text[i + 1] == L'\n') {
+            richText.push_back(L'\r');
+            ++i;
+            continue;
+        }
+        richText.push_back(text[i]);
+    }
+
+    SetWindowText(richEdit, richText.c_str());
+    SendMessage(richEdit, EM_SETBKGNDCOLOR, FALSE, RGB(45, 45, 45));
+
+    CHARRANGE allRange = {0, -1};
+    SendMessage(richEdit, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&allRange));
+
+    PARAFORMAT2 paragraphFormat = {};
+    paragraphFormat.cbSize = sizeof(paragraphFormat);
+    paragraphFormat.dwMask = PFM_TABSTOPS;
+    paragraphFormat.cTabCount = 1;
+    paragraphFormat.rgxTabs[0] = 2600; // Twips: aligns descriptions after dash.
+    SendMessage(richEdit, EM_SETPARAFORMAT, 0, reinterpret_cast<LPARAM>(&paragraphFormat));
+
+    CHARFORMAT2W baseFormat = {};
+    baseFormat.cbSize = sizeof(baseFormat);
+    baseFormat.dwMask = CFM_BOLD | CFM_COLOR | CFM_FACE | CFM_SIZE;
+    baseFormat.dwEffects = 0;
+    baseFormat.crTextColor = RGB(255, 255, 255);
+    baseFormat.yHeight = 220;
+    wcscpy_s(baseFormat.szFaceName, L"Segoe UI");
+    SendMessage(richEdit, EM_SETCHARFORMAT, SCF_SELECTION, reinterpret_cast<LPARAM>(&baseFormat));
+
+    const CHARFORMAT2W boldFormat = []() {
+        CHARFORMAT2W format = {};
+        format.cbSize = sizeof(format);
+        format.dwMask = CFM_BOLD;
+        format.dwEffects = CFE_BOLD;
+        return format;
+    }();
+
+    auto applyBoldRange = [&](const wchar_t* headerText) {
+        const size_t startPos = richText.find(headerText);
+        if (startPos == std::wstring::npos) {
+            return;
+        }
+
+        CHARRANGE range = {
+            static_cast<LONG>(startPos),
+            static_cast<LONG>(startPos + wcslen(headerText))
+        };
+        SendMessage(richEdit, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&range));
+        SendMessage(richEdit, EM_SETCHARFORMAT, SCF_SELECTION, reinterpret_cast<LPARAM>(&boldFormat));
+    };
+
+    applyBoldRange(L"Глобальные горячие клавиши:");
+    applyBoldRange(L"Локальные горячие клавиши (в окне приложения):");
+
+    CHARRANGE clearSelection = {-1, -1};
+    SendMessage(richEdit, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&clearSelection));
+}
+} // namespace
 
 Application::Application()
     : m_hInstance(nullptr)
@@ -42,7 +148,12 @@ Application::Application()
     , m_hGenerateBtn(nullptr)
     , m_hCopyBtn(nullptr)
     , m_hSaveBtn(nullptr)
+    , m_hHelpBtn(nullptr)
     , m_hTreeCanvas(nullptr)
+    , m_hStatusLabel(nullptr)
+    , m_hHotkeysWindow(nullptr)
+    , m_hAboutWindow(nullptr)
+    , m_hMainMenu(nullptr)
     , m_currentDepth(1)
     , m_isMinimized(false)
     , m_isDefaultDepthValue(true)
@@ -56,6 +167,7 @@ Application::Application()
     , m_hStaticBrush(nullptr)
     , m_hFont(nullptr)
     , m_hMonoFont(nullptr)
+    , m_hInfoFont(nullptr)
     , m_isGenerating(false)
     , m_isSaving(false)
     , m_animationStep(0) {
@@ -93,6 +205,10 @@ bool Application::Initialize(HINSTANCE hInstance) {
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
     icex.dwICC = ICC_WIN95_CLASSES;
     InitCommonControlsEx(&icex);
+
+    if (!g_richEditModule) {
+        g_richEditModule = LoadLibrary(L"Msftedit.dll");
+    }
 
     WNDCLASSEX wcex = {};
     wcex.cbSize = sizeof(WNDCLASSEX);
@@ -143,7 +259,15 @@ bool Application::Initialize(HINSTANCE hInstance) {
         return false;
     }
 
+    CreateMainMenu();
     CreateControls();
+    RECT initialClientRect = {};
+    GetClientRect(m_hWnd, &initialClientRect);
+    OnResize(initialClientRect.right - initialClientRect.left, initialClientRect.bottom - initialClientRect.top);
+    if (!RegisterInfoWindowClass()) {
+        MessageBox(nullptr, L"Ошибка регистрации класса информационного окна", L"Отладка", MB_OK);
+        return false;
+    }
     
     m_systemTray = std::make_unique<SystemTray>(this);
     m_globalHotkeys = std::make_unique<GlobalHotkeys>(this);
@@ -212,8 +336,12 @@ void Application::CreateControls() {
                                WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
                                440, 104, 150, 32, m_hWnd, reinterpret_cast<HMENU>(ID_SAVE_BTN), m_hInstance, nullptr);
 
+    m_hHelpBtn = CreateWindowEx(0, L"BUTTON", L"Справка",
+                               WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+                               658, 16, 106, 24, m_hWnd, reinterpret_cast<HMENU>(ID_HELP_BTN), m_hInstance, nullptr);
+
     // Tree canvas positioned inside tree card - scrollbars appear automatically when needed
-    m_hTreeCanvas = CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    m_hTreeCanvas = CreateWindowEx(0, L"EDIT", L"",
                                   WS_VISIBLE | WS_CHILD |
                                   ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL,
                                   24, 176, 740, 300, m_hWnd, reinterpret_cast<HMENU>(ID_TREE_CANVAS), m_hInstance, nullptr);
@@ -232,6 +360,7 @@ void Application::CreateControls() {
     // Apply the modern font to all controls
     SendMessage(m_hDepthEdit, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), MAKELPARAM(FALSE, 0));
     SendMessage(m_hPathEdit, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), MAKELPARAM(FALSE, 0));
+    SendMessage(m_hHelpBtn, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), MAKELPARAM(FALSE, 0));
     SendMessage(m_hStatusLabel, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), MAKELPARAM(FALSE, 0));
     
     // Apply font to static labels too
@@ -251,11 +380,53 @@ void Application::CreateControls() {
         CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas"
     );
     SendMessage(m_hTreeCanvas, WM_SETFONT, reinterpret_cast<WPARAM>(m_hMonoFont), MAKELPARAM(FALSE, 0));
+
+    m_hInfoFont = CreateFont(
+        -15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI"
+    );
     
     // Initialize button animation values
     m_buttonHoverAlpha[m_hGenerateBtn] = 0.0f;
     m_buttonHoverAlpha[m_hCopyBtn] = 0.0f;
     m_buttonHoverAlpha[m_hSaveBtn] = 0.0f;
+    m_buttonHoverAlpha[m_hHelpBtn] = 0.0f;
+}
+
+void Application::CreateMainMenu() {
+    m_hMainMenu = CreatePopupMenu();
+    if (!m_hMainMenu) {
+        return;
+    }
+
+    AppendMenu(m_hMainMenu, MF_OWNERDRAW, ID_MENU_HELP_HOTKEYS, L"Горячие клавиши...");
+    AppendMenu(m_hMainMenu, MF_OWNERDRAW, ID_MENU_HELP_ABOUT, L"О программе...");
+
+    MENUINFO popupMenuInfo = {};
+    popupMenuInfo.cbSize = sizeof(MENUINFO);
+    popupMenuInfo.fMask = MIM_BACKGROUND;
+    popupMenuInfo.hbrBack = m_hEditBrush;
+    SetMenuInfo(m_hMainMenu, &popupMenuInfo);
+}
+
+bool Application::RegisterInfoWindowClass() {
+    WNDCLASSEX wcex = {};
+    wcex.cbSize = sizeof(WNDCLASSEX);
+    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.lpfnWndProc = InfoWindowProc;
+    wcex.hInstance = m_hInstance;
+    wcex.hIcon = LoadIcon(m_hInstance, MAKEINTRESOURCE(IDI_MAIN_ICON));
+    wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wcex.hbrBackground = nullptr;
+    wcex.lpszClassName = INFO_WINDOW_CLASS;
+    wcex.hIconSm = LoadIcon(m_hInstance, MAKEINTRESOURCE(IDI_MAIN_ICON));
+
+    if (!RegisterClassEx(&wcex)) {
+        return GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+    }
+
+    return true;
 }
 
 int Application::Run() {
@@ -327,6 +498,15 @@ void Application::Shutdown() {
         m_fileSaveService->Cancel();
         m_fileSaveService.reset();
     }
+
+    if (m_hHotkeysWindow && IsWindow(m_hHotkeysWindow)) {
+        DestroyWindow(m_hHotkeysWindow);
+        m_hHotkeysWindow = nullptr;
+    }
+    if (m_hAboutWindow && IsWindow(m_hAboutWindow)) {
+        DestroyWindow(m_hAboutWindow);
+        m_hAboutWindow = nullptr;
+    }
     
     // Clean up brushes
     if (m_hBgBrush) DeleteObject(m_hBgBrush);
@@ -336,6 +516,12 @@ void Application::Shutdown() {
     // Clean up fonts
     if (m_hFont) DeleteObject(m_hFont);
     if (m_hMonoFont) DeleteObject(m_hMonoFont);
+    if (m_hInfoFont) DeleteObject(m_hInfoFont);
+
+    if (m_hMainMenu) {
+        DestroyMenu(m_hMainMenu);
+        m_hMainMenu = nullptr;
+    }
     
     // Stop animation timer if running
     if (m_animationTimer) {
@@ -350,6 +536,11 @@ void Application::Shutdown() {
     
     // Uninitialize COM
     CoUninitialize();
+
+    if (g_richEditModule) {
+        FreeLibrary(g_richEditModule);
+        g_richEditModule = nullptr;
+    }
 }
 
 void Application::ShowWindow(bool show) {
@@ -412,6 +603,34 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         OnCommand(LOWORD(wParam));
         break;
 
+    case WM_MEASUREITEM:
+        {
+            MEASUREITEMSTRUCT* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
+            if (mis && mis->CtlType == ODT_MENU) {
+                const wchar_t* text = GetMenuItemText(mis->itemID, mis->itemData);
+                if (text) {
+                    HDC hdc = GetDC(m_hWnd);
+                    if (!hdc) {
+                        return FALSE;
+                    }
+
+                    HFONT hMenuFont = m_hFont ? m_hFont : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+                    HFONT hOldFont = static_cast<HFONT>(SelectObject(hdc, hMenuFont));
+
+                    SIZE textSize = {};
+                    GetTextExtentPoint32(hdc, text, lstrlenW(text), &textSize);
+
+                    mis->itemWidth = textSize.cx + 38;
+                    mis->itemHeight = (textSize.cy + 10 > 26) ? (textSize.cy + 10) : 26;
+
+                    SelectObject(hdc, hOldFont);
+                    ReleaseDC(m_hWnd, hdc);
+                    return TRUE;
+                }
+            }
+        }
+        break;
+
     case WM_DRAWITEM:
         {
             DRAWITEMSTRUCT* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
@@ -425,6 +644,53 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 
                 UiRenderer::DrawCustomButton(dis->hDC, dis->hwndItem, buttonText, isPressed, m_buttonHoverAlpha[dis->hwndItem]);
                 return TRUE;
+            }
+
+            if (dis->CtlType == ODT_MENU) {
+                const wchar_t* text = GetMenuItemText(dis->itemID, dis->itemData);
+                if (text) {
+                    const bool isSelected = (dis->itemState & ODS_SELECTED) != 0;
+                    const bool isDisabled = (dis->itemState & ODS_DISABLED) != 0;
+
+                    HBRUSH hBgBrush = CreateSolidBrush(isSelected ? RGB(68, 68, 68) : RGB(45, 45, 45));
+                    FillRect(dis->hDC, &dis->rcItem, hBgBrush);
+                    DeleteObject(hBgBrush);
+
+                    if (isSelected) {
+                        HPEN hPen = CreatePen(PS_SOLID, 1, RGB(85, 85, 85));
+                        HPEN hOldPen = static_cast<HPEN>(SelectObject(dis->hDC, hPen));
+                        HBRUSH hOldBrush = static_cast<HBRUSH>(SelectObject(dis->hDC, GetStockObject(NULL_BRUSH)));
+                        Rectangle(dis->hDC, dis->rcItem.left, dis->rcItem.top, dis->rcItem.right, dis->rcItem.bottom);
+                        SelectObject(dis->hDC, hOldBrush);
+                        SelectObject(dis->hDC, hOldPen);
+                        DeleteObject(hPen);
+                    }
+
+                    HFONT hMenuFont = m_hFont ? m_hFont : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+                    HFONT hOldFont = static_cast<HFONT>(SelectObject(dis->hDC, hMenuFont));
+                    SetBkMode(dis->hDC, TRANSPARENT);
+                    SetTextColor(dis->hDC, isDisabled ? RGB(150, 150, 150) : RGB(255, 255, 255));
+
+                    RECT textRect = dis->rcItem;
+                    textRect.left += 14;
+                    DrawText(dis->hDC, text, -1, &textRect, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+
+                    SelectObject(dis->hDC, hOldFont);
+                    return TRUE;
+                }
+            }
+        }
+        break;
+
+    case WM_INITMENUPOPUP:
+        {
+            HMENU popupMenu = reinterpret_cast<HMENU>(wParam);
+            if (popupMenu) {
+                MENUINFO popupMenuInfo = {};
+                popupMenuInfo.cbSize = sizeof(MENUINFO);
+                popupMenuInfo.fMask = MIM_BACKGROUND;
+                popupMenuInfo.hbrBack = m_hEditBrush;
+                SetMenuInfo(popupMenu, &popupMenuInfo);
             }
         }
         break;
@@ -456,6 +722,8 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                     m_hoveredButton = m_hCopyBtn;
                 } else if (IsPointInButton(m_hSaveBtn, pt)) {
                     m_hoveredButton = m_hSaveBtn;
+                } else if (IsPointInButton(m_hHelpBtn, pt)) {
+                    m_hoveredButton = m_hHelpBtn;
                 }
                 
                 // Start animation if hover state changed
@@ -622,10 +890,6 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     case WM_NCCALCSIZE:
         // Let Windows handle the default calculation
         return DefWindowProc(m_hWnd, message, wParam, lParam);
-        
-    case WM_NCACTIVATE:
-        // Ensure title bar is properly activated/deactivated
-        return DefWindowProc(m_hWnd, message, wParam, lParam);
 
     case WM_DESTROY:
         KillTimer(m_hWnd, STATUS_TIMER_ID);
@@ -683,8 +947,17 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 
 void Application::OnResize(int width, int height) {
     if (width > 0 && height > 0) {
-        // Resize path edit inside input card
-        MoveWindow(m_hPathEdit, 174, 46, width - 190, 24, TRUE);
+        // Keep help button integrated into the top card.
+        const int helpButtonWidth = 106;
+        const int helpButtonHeight = 24;
+        const int helpButtonX = width - 24 - helpButtonWidth;
+        MoveWindow(m_hHelpBtn, helpButtonX, 16, helpButtonWidth, helpButtonHeight, TRUE);
+
+        // Resize path edit inside input card and keep spacing before help button.
+        const int pathX = 174;
+        const int pathRight = helpButtonX - 16;
+        const int pathWidth = (pathRight > pathX) ? (pathRight - pathX) : 120;
+        MoveWindow(m_hPathEdit, pathX, 46, pathWidth, 24, TRUE);
         
         // Center buttons in the button card with larger sizes
         int totalButtonWidth = 170 + 150 + 150 + 20; // buttons + gaps
@@ -735,6 +1008,9 @@ void Application::OnPaint() {
 
 void Application::OnCommand(int commandId) {
     switch (commandId) {
+    case ID_HELP_BTN:
+        ShowHelpMenu();
+        break;
     case ID_GENERATE_BTN:
         GenerateTree();
         break;
@@ -743,6 +1019,12 @@ void Application::OnCommand(int commandId) {
         break;
     case ID_SAVE_BTN:
         SaveToFile();
+        break;
+    case ID_MENU_HELP_HOTKEYS:
+        ShowHotkeysWindow();
+        break;
+    case ID_MENU_HELP_ABOUT:
+        ShowAboutWindow();
         break;
     }
 }
@@ -1059,6 +1341,260 @@ void Application::ShowPersistentStatusMessage(const std::wstring& message) {
     // Don't set timer - message will persist until explicitly changed
 }
 
+void Application::ShowHelpMenu() {
+    if (!m_hMainMenu || !m_hHelpBtn || !IsWindow(m_hHelpBtn)) {
+        return;
+    }
+
+    RECT buttonRect = {};
+    GetWindowRect(m_hHelpBtn, &buttonRect);
+
+    SetForegroundWindow(m_hWnd);
+    TrackPopupMenu(
+        m_hMainMenu,
+        TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
+        buttonRect.left,
+        buttonRect.bottom + 2,
+        0,
+        m_hWnd,
+        nullptr
+    );
+
+    PostMessage(m_hWnd, WM_NULL, 0, 0);
+}
+
+void Application::ShowHotkeysWindow() {
+    const std::wstring hotkeysText =
+        L"Глобальные горячие клавиши:\r\n"
+        L"Alt+T\t— показать/скрыть окно утилиты\r\n\r\n"
+        L"Локальные горячие клавиши (в окне приложения):\r\n"
+        L"Enter\t— построить дерево\r\n"
+        L"Ctrl+C\t— копировать результат\r\n"
+        L"Ctrl+S\t— сохранить результат\r\n"
+        L"0-9\t— ввод глубины\r\n"
+        L"-\t— смена знака глубины\r\n"
+        L"Backspace\t— редактирование глубины\r\n"
+        L"Shift+Backspace\t— очистка поля глубины\r\n"
+        L"Стрелки\t— прокрутка дерева / изменение глубины\r\n";
+
+    CreateOrActivateInfoWindow(InfoWindowKind::Hotkeys, m_hHotkeysWindow, L"Горячие клавиши", hotkeysText);
+}
+
+void Application::ShowAboutWindow() {
+    std::wstring aboutText;
+    aboutText.reserve(256);
+    aboutText += L"Directory Tree Utility\r\n";
+    aboutText += L"Версия: ";
+    aboutText += APP_VERSION;
+    aboutText += L"\r\n";
+    aboutText += L"Автор: laynholt\r\n\r\n";
+    aboutText += L"Утилита для построения символьного дерева директорий.\r\n";
+    aboutText += L"Поддерживает экспорт в TXT / JSON / XML.";
+
+    CreateOrActivateInfoWindow(InfoWindowKind::About, m_hAboutWindow, L"О программе", aboutText);
+}
+
+void Application::CreateOrActivateInfoWindow(InfoWindowKind kind, HWND& targetHandle, const wchar_t* title, const std::wstring& bodyText) {
+    if (targetHandle && IsWindow(targetHandle)) {
+        ::ShowWindow(targetHandle, SW_SHOWNORMAL);
+        SetForegroundWindow(targetHandle);
+        return;
+    }
+
+    const int windowWidth = (kind == InfoWindowKind::Hotkeys) ? 620 : 500;
+    const int windowHeight = (kind == InfoWindowKind::Hotkeys) ? 420 : 280;
+
+    RECT parentRect;
+    GetWindowRect(m_hWnd, &parentRect);
+    int x = parentRect.left + ((parentRect.right - parentRect.left) - windowWidth) / 2;
+    int y = parentRect.top + ((parentRect.bottom - parentRect.top) - windowHeight) / 2;
+    if (x < 0) x = 50;
+    if (y < 0) y = 50;
+
+    auto* state = new InfoWindowState{
+        this,
+        static_cast<int>(kind),
+        nullptr,
+        nullptr,
+        bodyText,
+        (m_hInfoFont ? m_hInfoFont : m_hFont),
+        nullptr,
+        false
+    };
+
+    targetHandle = CreateWindowEx(
+        WS_EX_DLGMODALFRAME,
+        INFO_WINDOW_CLASS,
+        title,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+        x, y,
+        windowWidth, windowHeight,
+        m_hWnd,
+        nullptr,
+        m_hInstance,
+        state
+    );
+
+    if (!targetHandle) {
+        delete state;
+        ShowStatusMessage(L"Не удалось открыть информационное окно");
+        return;
+    }
+
+    ::ShowWindow(targetHandle, SW_SHOW);
+    UpdateWindow(targetHandle);
+}
+
+void Application::OnInfoWindowClosed(InfoWindowKind kind) {
+    if (kind == InfoWindowKind::Hotkeys) {
+        m_hHotkeysWindow = nullptr;
+    } else {
+        m_hAboutWindow = nullptr;
+    }
+}
+
+LRESULT CALLBACK Application::InfoWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    auto* state = reinterpret_cast<InfoWindowState*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
+
+    switch (message) {
+    case WM_NCCREATE:
+        {
+            CREATESTRUCT* create = reinterpret_cast<CREATESTRUCT*>(lParam);
+            auto* initialState = reinterpret_cast<InfoWindowState*>(create->lpCreateParams);
+            SetWindowLongPtr(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(initialState));
+            return TRUE;
+        }
+
+    case WM_CREATE:
+        if (state) {
+            state->editBrush = CreateSolidBrush(RGB(45, 45, 45));
+            state->useRichText = (static_cast<InfoWindowKind>(state->kind) == InfoWindowKind::Hotkeys) && (g_richEditModule != nullptr);
+
+            state->textControl = CreateWindowEx(
+                0,
+                state->useRichText ? MSFTEDIT_CLASS : L"EDIT",
+                state->useRichText ? L"" : state->text.c_str(),
+                WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_WANTRETURN | ES_READONLY,
+                12, 12, 100, 100,
+                hWnd,
+                reinterpret_cast<HMENU>(ID_INFO_TEXT),
+                GetModuleHandle(nullptr),
+                nullptr
+            );
+
+            state->closeButton = CreateWindowEx(
+                0,
+                L"BUTTON",
+                L"Закрыть",
+                WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | BS_OWNERDRAW,
+                12, 12, 120, 30,
+                hWnd,
+                reinterpret_cast<HMENU>(ID_INFO_CLOSE),
+                GetModuleHandle(nullptr),
+                nullptr
+            );
+
+            if (state->font) {
+                SendMessage(state->textControl, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), MAKELPARAM(FALSE, 0));
+                SendMessage(state->closeButton, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), MAKELPARAM(FALSE, 0));
+            }
+
+            if (state->useRichText && state->textControl) {
+                ApplyHotkeysFormatting(state->textControl, state->text);
+            }
+        }
+        return 0;
+
+    case WM_SIZE:
+        if (state) {
+            const int width = LOWORD(lParam);
+            const int height = HIWORD(lParam);
+            const int margin = 20;
+            const int buttonWidth = 120;
+            const int buttonHeight = 30;
+
+            MoveWindow(state->textControl, margin, margin, width - (margin * 2), height - (margin * 3) - buttonHeight, TRUE);
+            MoveWindow(state->closeButton, width - margin - buttonWidth, height - margin - buttonHeight, buttonWidth, buttonHeight, TRUE);
+        }
+        return 0;
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_PAINT:
+        {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hWnd, &ps);
+
+            RECT clientRect;
+            GetClientRect(hWnd, &clientRect);
+            UiRenderer::DrawBackground(hdc, clientRect);
+
+            RECT cardRect = {8, 8, clientRect.right - 8, clientRect.bottom - 8};
+            UiRenderer::DrawCard(hdc, cardRect);
+
+            EndPaint(hWnd, &ps);
+
+            if (state && state->textControl) {
+                UiRenderer::DrawEditBorder(hWnd, state->textControl);
+            }
+        }
+        return 0;
+
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT:
+        if (state && state->editBrush) {
+            HDC hdcControl = reinterpret_cast<HDC>(wParam);
+            SetTextColor(hdcControl, RGB(255, 255, 255));
+            SetBkColor(hdcControl, RGB(45, 45, 45));
+            return reinterpret_cast<INT_PTR>(state->editBrush);
+        }
+        break;
+
+    case WM_DRAWITEM:
+        {
+            DRAWITEMSTRUCT* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+            if (dis && dis->CtlType == ODT_BUTTON && dis->CtlID == ID_INFO_CLOSE) {
+                bool isPressed = (dis->itemState & ODS_SELECTED) != 0;
+                float hoverAlpha = (dis->itemState & ODS_HOTLIGHT) ? 1.0f : 0.0f;
+                UiRenderer::DrawCustomButton(dis->hDC, dis->hwndItem, L"Закрыть", isPressed, hoverAlpha);
+                return TRUE;
+            }
+        }
+        break;
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == ID_INFO_CLOSE || LOWORD(wParam) == IDOK) {
+            DestroyWindow(hWnd);
+            return 0;
+        }
+        break;
+
+    case WM_CLOSE:
+        DestroyWindow(hWnd);
+        return 0;
+
+    case WM_DESTROY:
+        return 0;
+
+    case WM_NCDESTROY:
+        if (state) {
+            if (state->editBrush) {
+                DeleteObject(state->editBrush);
+                state->editBrush = nullptr;
+            }
+            if (state->owner) {
+                state->owner->OnInfoWindowClosed(static_cast<InfoWindowKind>(state->kind));
+            }
+            delete state;
+            SetWindowLongPtr(hWnd, GWLP_USERDATA, 0);
+        }
+        return DefWindowProc(hWnd, message, wParam, lParam);
+    }
+
+    return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
 
 
 void Application::OnLButtonDown(LPARAM lParam) {
@@ -1076,6 +1612,10 @@ void Application::OnLButtonDown(LPARAM lParam) {
         m_pressedButton = m_hSaveBtn;
         InvalidateButton(m_hSaveBtn);
         SetCapture(m_hWnd);
+    } else if (IsPointInButton(m_hHelpBtn, pt)) {
+        m_pressedButton = m_hHelpBtn;
+        InvalidateButton(m_hHelpBtn);
+        SetCapture(m_hWnd);
     }
 }
 
@@ -1091,6 +1631,8 @@ void Application::OnLButtonUp(LPARAM lParam) {
                 CopyToClipboard();
             } else if (m_pressedButton == m_hSaveBtn) {
                 SaveToFile();
+            } else if (m_pressedButton == m_hHelpBtn) {
+                ShowHelpMenu();
             }
         }
         
@@ -1101,6 +1643,10 @@ void Application::OnLButtonUp(LPARAM lParam) {
 }
 
 bool Application::IsPointInButton(HWND hBtn, POINT pt) {
+    if (!hBtn || !IsWindow(hBtn)) {
+        return false;
+    }
+
     RECT btnRect;
     GetWindowRect(hBtn, &btnRect);
     ScreenToClient(m_hWnd, reinterpret_cast<LPPOINT>(&btnRect.left));

@@ -27,10 +27,18 @@ public:
     void ToggleVisibility();
 
 private:
+    enum class InfoWindowKind {
+        Hotkeys,
+        About
+    };
+
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK InfoWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
     void CreateControls();
+    void CreateMainMenu();
+    bool RegisterInfoWindowClass();
     void OnResize(int width, int height);
     void OnPaint();
     void OnCommand(int commandId);
@@ -58,6 +66,11 @@ private:
     void UpdateCurrentPath();
     void ShowStatusMessage(const std::wstring& message);
     void ShowPersistentStatusMessage(const std::wstring& message);
+    void ShowHelpMenu();
+    void ShowHotkeysWindow();
+    void ShowAboutWindow();
+    void CreateOrActivateInfoWindow(InfoWindowKind kind, HWND& targetHandle, const wchar_t* title, const std::wstring& bodyText);
+    void OnInfoWindowClosed(InfoWindowKind kind);
     void ScrollCanvas(int direction); // 0=up, 1=down, 2=left, 3=right
     std::wstring GetCurrentWorkingPath();
     void HandleMouseWheelScroll(int delta);
@@ -69,8 +82,12 @@ private:
     HWND m_hGenerateBtn;
     HWND m_hCopyBtn;
     HWND m_hSaveBtn;
+    HWND m_hHelpBtn;
     HWND m_hTreeCanvas;
     HWND m_hStatusLabel;
+    HWND m_hHotkeysWindow;
+    HWND m_hAboutWindow;
+    HMENU m_hMainMenu;
 
     std::unique_ptr<SystemTray> m_systemTray;
     std::unique_ptr<GlobalHotkeys> m_globalHotkeys;
@@ -106,6 +123,7 @@ private:
     // Fonts
     HFONT m_hFont;
     HFONT m_hMonoFont;
+    HFONT m_hInfoFont;
     
     static const UINT_PTR STATUS_TIMER_ID = 1;
     static const UINT_PTR PATH_UPDATE_TIMER_ID = 2;
