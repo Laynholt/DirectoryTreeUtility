@@ -6,6 +6,7 @@ const wchar_t* WINDOW_CLASS_NAME = L"DirectoryTreeUtilityClass";
 const UINT WM_ACTIVATE_INSTANCE = WM_USER + 200;
 
 BOOL CALLBACK EnumWindowsProc(HWND hWnd, LPARAM lParam) {
+    UNREFERENCED_PARAMETER(lParam);
     wchar_t className[256];
     if (GetClassName(hWnd, className, 256) > 0) {
         if (wcscmp(className, WINDOW_CLASS_NAME) == 0) {

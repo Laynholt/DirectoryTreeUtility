@@ -4,14 +4,13 @@
 #include <string>
 #include <memory>
 #include <map>
-#include <thread>
 #include <atomic>
-#include <mutex>
 #include <functional>
 
-class DirectoryTreeBuilder;
 class SystemTray;
 class GlobalHotkeys;
+class TreeGenerationService;
+class FileSaveService;
 enum class TreeFormat;
 
 class Application {
@@ -38,13 +37,9 @@ private:
     void OnKeyDown(WPARAM key, LPARAM flags);
     void OnLButtonDown(LPARAM lParam);
     void OnLButtonUp(LPARAM lParam);
-    void DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text, bool isPressed);
     bool IsPointInButton(HWND hBtn, POINT pt);
     void InvalidateButton(HWND hBtn);
     void RedrawButtonDirect(HWND hBtn);
-    void DrawCard(HDC hdc, RECT rect, const std::wstring& title = L"");
-    void DrawBackground(HDC hdc, RECT rect);
-    void DrawEditBorder(HWND hEdit);
     static LRESULT CALLBACK TreeCanvasSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
     static LRESULT CALLBACK DepthEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
     
@@ -66,7 +61,6 @@ private:
     void ScrollCanvas(int direction); // 0=up, 1=down, 2=left, 3=right
     std::wstring GetCurrentWorkingPath();
     void HandleMouseWheelScroll(int delta);
-    void CleanupCanvasMemory(); // Cleanup edit control memory
 
     HINSTANCE m_hInstance;
     HWND m_hWnd;
@@ -78,25 +72,21 @@ private:
     HWND m_hTreeCanvas;
     HWND m_hStatusLabel;
 
-    std::unique_ptr<DirectoryTreeBuilder> m_treeBuilder;
     std::unique_ptr<SystemTray> m_systemTray;
     std::unique_ptr<GlobalHotkeys> m_globalHotkeys;
+    std::unique_ptr<TreeGenerationService> m_treeGenerationService;
+    std::unique_ptr<FileSaveService> m_fileSaveService;
 
     std::wstring m_treeContent;
     int m_currentDepth;
     bool m_isMinimized;
     bool m_isDefaultDepthValue;
     bool m_hasGeneratedTree;  // Flag to track if tree was generated
-    bool m_shouldCleanupCanvas; // Flag to trigger canvas memory cleanup
     std::wstring m_lastKnownPath;
     
     // Multithreading support
-    std::thread m_generationThread;
-    std::thread m_saveThread;
-    std::atomic<bool> m_cancelGeneration;
     std::atomic<bool> m_isGenerating;
     std::atomic<bool> m_isSaving;
-    std::mutex m_treeMutex;
     int m_animationStep;
     
     // GDI+ and custom drawing

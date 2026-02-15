@@ -12,5 +12,5 @@ public:
 private:
     static IShellWindows* GetShellWindows();
     static IWebBrowser2* GetActiveExplorer();
-    static std::wstring ExtractPathFromVariant(const VARIANT& var);
+    static std::wstring ExtractPathFromUrl(const std::wstring& url);
 };

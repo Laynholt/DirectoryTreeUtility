@@ -3,30 +3,71 @@
 #include <exdisp.h>
 #include <shlguid.h>
 #include <shldisp.h>
+#include <shlwapi.h>
 
 #pragma comment(lib, "ole32.lib")
+
+namespace {
+int HexValue(wchar_t ch) {
+    if (ch >= L'0' && ch <= L'9') {
+        return static_cast<int>(ch - L'0');
+    }
+    if (ch >= L'a' && ch <= L'f') {
+        return static_cast<int>(10 + (ch - L'a'));
+    }
+    if (ch >= L'A' && ch <= L'F') {
+        return static_cast<int>(10 + (ch - L'A'));
+    }
+    return -1;
+}
+
+std::wstring DecodePercentUtf8(const std::wstring& value) {
+    std::string utf8Bytes;
+    utf8Bytes.reserve(value.size());
+
+    for (size_t i = 0; i < value.size(); ++i) {
+        const wchar_t ch = value[i];
+        if (ch == L'%' && i + 2 < value.size()) {
+            const int hi = HexValue(value[i + 1]);
+            const int lo = HexValue(value[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                utf8Bytes.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+
+        if (ch <= 0x7F) {
+            utf8Bytes.push_back(static_cast<char>(ch));
+        }
+    }
+
+    if (utf8Bytes.empty()) {
+        return std::wstring();
+    }
+
+    int wideLength = MultiByteToWideChar(CP_UTF8, 0, utf8Bytes.c_str(), static_cast<int>(utf8Bytes.size()), nullptr, 0);
+    if (wideLength <= 0) {
+        return std::wstring(value);
+    }
+
+    std::wstring result(static_cast<size_t>(wideLength), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8Bytes.c_str(), static_cast<int>(utf8Bytes.size()), result.data(), wideLength);
+    return result;
+}
+} // namespace
 
 std::wstring FileExplorerIntegration::GetActiveExplorerPath() {
     // COM should already be initialized by the main application
     
     std::wstring result;
-    IShellWindows* pShellWindows = GetShellWindows();
-    if (!pShellWindows) {
-        return result;
-    }
-    
     IWebBrowser2* pActiveExplorer = GetActiveExplorer();
     if (pActiveExplorer) {
         BSTR locationUrl = nullptr;
         
         HRESULT hr = pActiveExplorer->get_LocationURL(&locationUrl);
         if (SUCCEEDED(hr) && locationUrl) {
-            VARIANT var;
-            VariantInit(&var);
-            var.vt = VT_BSTR;
-            var.bstrVal = locationUrl;
-            result = ExtractPathFromVariant(var);
-            VariantClear(&var);
+            result = ExtractPathFromUrl(locationUrl);
         }
         
         if (locationUrl) {
@@ -34,8 +75,7 @@ std::wstring FileExplorerIntegration::GetActiveExplorerPath() {
         }
         pActiveExplorer->Release();
     }
-    
-    pShellWindows->Release();
+
     return result;
 }
 
@@ -88,7 +128,7 @@ IWebBrowser2* FileExplorerIntegration::GetActiveExplorer() {
                 if (SUCCEEDED(hr)) {
                     HWND hExplorerWnd = reinterpret_cast<HWND>(hWndPtr);
                     
-                    if (hExplorerWnd == hActivWnd || IsChild(hActivWnd, hExplorerWnd)) {
+                    if (hExplorerWnd == hActivWnd || IsChild(hExplorerWnd, hActivWnd)) {
                         pActiveExplorer = pWebBrowser;
                         pActiveExplorer->AddRef();
                     }
@@ -126,29 +166,45 @@ IWebBrowser2* FileExplorerIntegration::GetActiveExplorer() {
     return pActiveExplorer;
 }
 
-std::wstring FileExplorerIntegration::ExtractPathFromVariant(const VARIANT& var) {
-    if (var.vt != VT_BSTR || !var.bstrVal) {
+std::wstring FileExplorerIntegration::ExtractPathFromUrl(const std::wstring& url) {
+    if (url.empty()) {
         return std::wstring();
     }
-    
-    std::wstring url(var.bstrVal);
-    
-    if (url.find(L"file:///") == 0) {
-        std::wstring path = url.substr(8);
-        
-        size_t pos = 0;
-        while ((pos = path.find(L'/', pos)) != std::wstring::npos) {
-            path[pos] = L'\\';
-            pos++;
+
+    if (url.rfind(L"file:", 0) == 0) {
+        DWORD pathSize = static_cast<DWORD>(url.size() + 8);
+        std::wstring decodedPath(pathSize, L'\0');
+        HRESULT hr = PathCreateFromUrlW(url.c_str(), decodedPath.data(), &pathSize, 0);
+        if (SUCCEEDED(hr) && pathSize > 0) {
+            decodedPath.resize(pathSize);
+            if (!decodedPath.empty() && decodedPath.back() == L'\0') {
+                decodedPath.pop_back();
+            }
+            return decodedPath;
         }
-        
-        pos = 0;
-        while ((pos = path.find(L"%20", pos)) != std::wstring::npos) {
-            path.replace(pos, 3, L" ");
-            pos++;
+
+        // Fallback parser for cases when PathCreateFromUrlW fails.
+        std::wstring rawPath;
+        if (url.rfind(L"file:///", 0) == 0) {
+            rawPath = url.substr(8);
+        } else if (url.rfind(L"file://", 0) == 0) {
+            rawPath = L"\\\\" + url.substr(7); // UNC path
+        } else {
+            rawPath = url;
         }
-        
-        return path;
+
+        for (wchar_t& ch : rawPath) {
+            if (ch == L'/') {
+                ch = L'\\';
+            }
+        }
+
+        std::wstring decodedFallback = DecodePercentUtf8(rawPath);
+        if (!decodedFallback.empty()) {
+            return decodedFallback;
+        }
+
+        return rawPath;
     }
     
     return url;

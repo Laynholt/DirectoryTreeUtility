@@ -4,7 +4,7 @@
 #include <vector>
 #include <filesystem>
 #include <functional>
-#include <atomic>
+#include <unordered_set>
 
 enum class TreeFormat {
     TEXT,
@@ -35,9 +35,11 @@ public:
 
 private:
     TreeNode BuildNodeTree(const std::filesystem::path& path, int currentDepth, int maxDepth,
-                                std::function<bool()> shouldCancel,
-                                std::function<void(const std::wstring&)> progressCallback,
-                                int& processedCount);
+                                 std::function<bool()> shouldCancel,
+                                 std::function<void(const std::wstring&)> progressCallback,
+                                 int& processedCount,
+                                 std::unordered_set<std::wstring>& visitedPaths);
+    void RenderTreeToBuffer(const TreeNode& node, const std::wstring& prefix, bool isLast, std::wstring& out);
     std::wstring RenderTree(const TreeNode& root, const std::wstring& prefix = L"", bool isLast = true);
     std::wstring RenderTreeAsJson(const TreeNode& root, int indent = 0);
     std::wstring RenderTreeAsXml(const TreeNode& root, int indent = 0);

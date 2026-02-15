@@ -25,6 +25,9 @@ set(SOURCES
     src/FileExplorerIntegration.cpp
     src/SystemTray.cpp
     src/GlobalHotkeys.cpp
+    src/UiRenderer.cpp
+    src/TreeGenerationService.cpp
+    src/FileSaveService.cpp
 )
 
 # Header files
@@ -34,6 +37,9 @@ set(HEADERS
     src/FileExplorerIntegration.h
     src/SystemTray.h
     src/GlobalHotkeys.h
+    src/UiRenderer.h
+    src/TreeGenerationService.h
+    src/FileSaveService.h
     src/resource.h
 )
 
@@ -64,6 +70,7 @@ if(WIN32)
         kernel32
         gdi32
         comdlg32
+        shlwapi
     )
 endif()
 
@@ -104,17 +111,30 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
 )
 
-# Debug configuration
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    target_compile_definitions(${PROJECT_NAME} PRIVATE DEBUG _DEBUG)
-else()
-    target_compile_definitions(${PROJECT_NAME} PRIVATE NDEBUG)
-endif()
+# Configuration-specific compile definitions (works for both single- and multi-config generators)
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    $<$<CONFIG:Debug>:DEBUG;_DEBUG>
+    $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
+)
 
 # Install rules
 install(TARGETS ${PROJECT_NAME}
     RUNTIME DESTINATION bin
 )
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(DirectoryTreeBuilderTests
+        tests/DirectoryTreeBuilderTests.cpp
+        src/DirectoryTreeBuilder.cpp
+        src/DirectoryTreeBuilder.h
+    )
+    target_include_directories(DirectoryTreeBuilderTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_features(DirectoryTreeBuilderTests PRIVATE cxx_std_17)
+    add_test(NAME DirectoryTreeBuilderTests COMMAND DirectoryTreeBuilderTests)
+endif()
 
 # Print build information
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")

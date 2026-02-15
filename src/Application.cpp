@@ -3,6 +3,9 @@
 #include "SystemTray.h"
 #include "GlobalHotkeys.h"
 #include "FileExplorerIntegration.h"
+#include "UiRenderer.h"
+#include "TreeGenerationService.h"
+#include "FileSaveService.h"
 #include "resource.h"
 
 #include <windowsx.h>
@@ -44,7 +47,6 @@ Application::Application()
     , m_isMinimized(false)
     , m_isDefaultDepthValue(true)
     , m_hasGeneratedTree(false)
-    , m_shouldCleanupCanvas(false)
     , m_gdiplusToken(0)
     , m_hoveredButton(nullptr)
     , m_pressedButton(nullptr)
@@ -54,7 +56,6 @@ Application::Application()
     , m_hStaticBrush(nullptr)
     , m_hFont(nullptr)
     , m_hMonoFont(nullptr)
-    , m_cancelGeneration(false)
     , m_isGenerating(false)
     , m_isSaving(false)
     , m_animationStep(0) {
@@ -68,6 +69,9 @@ Application::Application()
 Application::~Application() {
     // Ensure background thread is properly cleaned up
     CancelGeneration();
+    if (m_fileSaveService) {
+        m_fileSaveService->Cancel();
+    }
 }
 
 bool Application::Initialize(HINSTANCE hInstance) {
@@ -141,9 +145,10 @@ bool Application::Initialize(HINSTANCE hInstance) {
 
     CreateControls();
     
-    m_treeBuilder = std::make_unique<DirectoryTreeBuilder>();
     m_systemTray = std::make_unique<SystemTray>(this);
     m_globalHotkeys = std::make_unique<GlobalHotkeys>(this);
+    m_treeGenerationService = std::make_unique<TreeGenerationService>();
+    m_fileSaveService = std::make_unique<FileSaveService>();
     
     if (!m_systemTray->Initialize()) {
         MessageBox(nullptr, L"Ошибка инициализации системного трея", L"Отладка", MB_OK);
@@ -159,8 +164,8 @@ bool Application::Initialize(HINSTANCE hInstance) {
     
     UpdateCurrentPath();
 
-    // Start timer for dynamic path updating (check every 2 seconds)
-    SetTimer(m_hWnd, PATH_UPDATE_TIMER_ID, 2000, nullptr);
+    // Start timer for dynamic path updating.
+    SetTimer(m_hWnd, PATH_UPDATE_TIMER_ID, 500, nullptr);
 
     return true;
 }
@@ -313,13 +318,14 @@ void Application::Shutdown() {
         m_systemTray.reset();
     }
     
-    // Wait for save thread to complete
-    if (m_saveThread.joinable()) {
-        m_saveThread.join();
+    if (m_treeGenerationService) {
+        m_treeGenerationService->Cancel();
+        m_treeGenerationService.reset();
     }
-    
-    if (m_treeBuilder) {
-        m_treeBuilder.reset();
+
+    if (m_fileSaveService) {
+        m_fileSaveService->Cancel();
+        m_fileSaveService.reset();
     }
     
     // Clean up brushes
@@ -417,7 +423,7 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 
                 bool isPressed = (m_pressedButton == dis->hwndItem) || (dis->itemState & ODS_SELECTED);
                 
-                DrawCustomButton(dis->hDC, dis->hwndItem, buttonText, isPressed);
+                UiRenderer::DrawCustomButton(dis->hDC, dis->hwndItem, buttonText, isPressed, m_buttonHoverAlpha[dis->hwndItem]);
                 return TRUE;
             }
         }
@@ -529,9 +535,9 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     case WM_PAINT:
         OnPaint();
         // Draw dark borders around edit controls
-        DrawEditBorder(m_hDepthEdit);
-        DrawEditBorder(m_hPathEdit);
-        DrawEditBorder(m_hTreeCanvas);
+        UiRenderer::DrawEditBorder(m_hWnd, m_hDepthEdit);
+        UiRenderer::DrawEditBorder(m_hWnd, m_hPathEdit);
+        UiRenderer::DrawEditBorder(m_hWnd, m_hTreeCanvas);
         break;
 
     case WM_KEYDOWN:
@@ -581,10 +587,12 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             KillTimer(m_hWnd, STATUS_TIMER_ID);
         }
         else if (wParam == PATH_UPDATE_TIMER_ID) {
-            std::wstring currentPath = GetCurrentWorkingPath();
-            if (currentPath != m_lastKnownPath) {
-                m_lastKnownPath = currentPath;
-                SetWindowText(m_hPathEdit, currentPath.c_str());
+            // Poll active Explorer path directly without fallback to CWD.
+            // This keeps the last valid Explorer path when Explorer is not focused.
+            std::wstring explorerPath = FileExplorerIntegration::GetActiveExplorerPath();
+            if (!explorerPath.empty() && explorerPath != m_lastKnownPath) {
+                m_lastKnownPath = explorerPath;
+                SetWindowText(m_hPathEdit, explorerPath.c_str());
             }
         }
         else if (wParam == PROGRESS_TIMER_ID) {
@@ -624,11 +632,22 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         KillTimer(m_hWnd, PATH_UPDATE_TIMER_ID);
         KillTimer(m_hWnd, PROGRESS_TIMER_ID);
         CancelGeneration(); // Ensure background thread is stopped
+        if (m_fileSaveService) {
+            m_fileSaveService->Cancel();
+        }
         PostQuitMessage(0);
         break;
 
     case WM_TREE_COMPLETED:
-        OnTreeGenerationCompleted(m_treeContent);
+        {
+            std::wstring* completedResult = reinterpret_cast<std::wstring*>(lParam);
+            if (completedResult) {
+                OnTreeGenerationCompleted(*completedResult);
+                delete completedResult;
+            } else {
+                OnTreeGenerationError(L"Ошибка: результат построения дерева не получен");
+            }
+        }
         break;
         
     case WM_TREE_ERROR:
@@ -693,23 +712,23 @@ void Application::OnPaint() {
     GetClientRect(m_hWnd, &clientRect);
     
     // Draw main background
-    DrawBackground(hdc, clientRect);
+    UiRenderer::DrawBackground(hdc, clientRect);
     
     // Draw input controls card without title
     RECT inputCard = {8, 8, clientRect.right - 8, 84};
-    DrawCard(hdc, inputCard);
+    UiRenderer::DrawCard(hdc, inputCard);
     
     // Draw buttons card without title
     RECT buttonCard = {8, 92, clientRect.right - 8, 140};
-    DrawCard(hdc, buttonCard);
+    UiRenderer::DrawCard(hdc, buttonCard);
     
     // Draw tree display card - main content area
     RECT treeCard = {8, 148, clientRect.right - 8, clientRect.bottom - 60};
-    DrawCard(hdc, treeCard, L"Дерево каталогов");
+    UiRenderer::DrawCard(hdc, treeCard, L"Дерево каталогов");
     
     // Draw status card
     RECT statusCard = {8, clientRect.bottom - 52, clientRect.right - 8, clientRect.bottom - 8};
-    DrawCard(hdc, statusCard);
+    UiRenderer::DrawCard(hdc, statusCard);
     
     EndPaint(m_hWnd, &ps);
 }
@@ -777,7 +796,6 @@ void Application::GenerateTreeAsync() {
     
     // Mark as generating
     m_isGenerating = true;
-    m_cancelGeneration = false;
     m_animationStep = 0;
     
     // Start progress animation
@@ -794,60 +812,34 @@ void Application::GenerateTreeAsync() {
     GetWindowText(m_hDepthEdit, depthBuffer, 32);
     int depth = _wtoi(depthBuffer);
     std::wstring currentPath = GetCurrentWorkingPath();
-    
-    // Start generation in background thread
-    if (m_generationThread.joinable()) {
-        m_generationThread.join();
+
+    if (!m_treeGenerationService) {
+        OnTreeGenerationError(L"Сервис генерации не инициализирован");
+        return;
     }
-    
-    m_generationThread = std::thread([this, currentPath, depth]() {
-        try {
-            // Generate tree with cancellation support (always TEXT format for display)
-            std::wstring result = m_treeBuilder->BuildTree(
-                currentPath, 
-                depth,
-                TreeFormat::TEXT,
-                [this]() { return m_cancelGeneration.load(); },
-                [this](const std::wstring& progress) {
-                    // Post progress update to UI thread
-                    UNREFERENCED_PARAMETER(progress);
-                    std::lock_guard<std::mutex> lock(m_treeMutex);
-                    // We could update progress here if needed
-                }
-            );
-            
-            if (!m_cancelGeneration) {
-                // Post completion message to UI thread
-                std::lock_guard<std::mutex> lock(m_treeMutex);
-                
-                size_t oldCapacity = m_treeContent.capacity();
-                m_treeContent = std::move(result);
 
-                // If old tree was significantly larger (4x larger), flag canvas cleanup
-                if (oldCapacity > 4 * m_treeContent.capacity()) {
-                    m_shouldCleanupCanvas = true; // Flag to cleanup canvas memory
-                }
-
-                PostMessage(m_hWnd, WM_TREE_COMPLETED, 0, 0);
+    m_treeGenerationService->Start(
+        currentPath,
+        depth,
+        [this](std::wstring&& result) {
+            std::wstring* completedResult = new std::wstring(std::move(result));
+            if (!PostMessage(m_hWnd, WM_TREE_COMPLETED, 0, reinterpret_cast<LPARAM>(completedResult))) {
+                delete completedResult;
+            }
+        },
+        [this](std::wstring&& error) {
+            std::wstring* errorMessage = new std::wstring(std::move(error));
+            if (!PostMessage(m_hWnd, WM_TREE_ERROR, 0, reinterpret_cast<LPARAM>(errorMessage))) {
+                delete errorMessage;
             }
         }
-        catch (const std::exception& e) {
-            if (!m_cancelGeneration) {
-                // Post error message to UI thread
-                std::wstring error = L"Ошибка: ";
-                error += std::wstring(e.what(), e.what() + strlen(e.what()));
-                PostMessage(m_hWnd, WM_TREE_ERROR, 0, reinterpret_cast<LPARAM>(new std::wstring(error)));
-            }
-        }
-    });
+    );
 }
 
 void Application::CancelGeneration() {
     if (m_isGenerating) {
-        m_cancelGeneration = true;
-        
-        if (m_generationThread.joinable()) {
-            m_generationThread.join();
+        if (m_treeGenerationService) {
+            m_treeGenerationService->Cancel();
         }
         
         // Stop progress timer
@@ -861,18 +853,13 @@ void Application::CancelGeneration() {
 }
 
 void Application::OnTreeGenerationCompleted(const std::wstring& result) {
-    UNREFERENCED_PARAMETER(result);
     // Stop progress animation
     KillTimer(m_hWnd, PROGRESS_TIMER_ID);
-    
-    // Cleanup canvas memory if flagged
-    if (m_shouldCleanupCanvas) {
-        CleanupCanvasMemory();
-        m_shouldCleanupCanvas = false; // Reset flag
-    }
+
+    m_treeContent = result;
     
     // Update UI first
-    SetWindowText(m_hTreeCanvas, m_treeContent.c_str());
+    SetWindowText(m_hTreeCanvas, result.c_str());
     
     // Then show status message after tree is displayed
     ShowStatusMessage(L"Дерево директорий построено");
@@ -1001,18 +988,14 @@ void Application::SaveToFile() {
 }
 
 void Application::SaveFileSync(std::wstring&& fileName, const std::wstring& content) {
-    HANDLE hFile = CreateFile(fileName.c_str(), GENERIC_WRITE, 0, nullptr,
-                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hFile != INVALID_HANDLE_VALUE) {
-        DWORD bytesWritten;
-        int utf8Length = WideCharToMultiByte(CP_UTF8, 0, content.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        if (utf8Length > 0) {
-            std::string utf8Content(utf8Length - 1, '\0');
-            WideCharToMultiByte(CP_UTF8, 0, content.c_str(), -1, &utf8Content[0], utf8Length, nullptr, nullptr);
-            WriteFile(hFile, utf8Content.c_str(), static_cast<DWORD>(utf8Content.length()), &bytesWritten, nullptr);
-        }
-        CloseHandle(hFile);
+    std::wstring errorMessage;
+    if (m_fileSaveService && m_fileSaveService->SaveTextFileSync(fileName, content, &errorMessage)) {
         ShowStatusMessage(L"Файл сохранен");
+    } else {
+        if (errorMessage.empty()) {
+            errorMessage = L"Сервис сохранения не инициализирован";
+        }
+        ShowStatusMessage(errorMessage);
     }
 }
 
@@ -1027,40 +1010,27 @@ void Application::SaveFileAsync(std::wstring&& fileName, TreeFormat format) {
     GetWindowText(m_hDepthEdit, depthBuffer, 32);
     int depth = _wtoi(depthBuffer);
     std::wstring currentPath = GetCurrentWorkingPath();
-    
-    // Join previous save thread if exists
-    if (m_saveThread.joinable()) {
-        m_saveThread.join();
+
+    if (!m_fileSaveService) {
+        OnSaveError(L"Сервис сохранения не инициализирован");
+        return;
     }
-    
-    m_saveThread = std::thread([this, fileName = std::move(fileName), format, currentPath = std::move(currentPath), depth]() {
-        try {
-            // Generate content in requested format
-            std::wstring content = m_treeBuilder->BuildTree(currentPath, depth, format);
-            
-            // Save to file
-            HANDLE hFile = CreateFile(fileName.c_str(), GENERIC_WRITE, 0, nullptr,
-                                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (hFile != INVALID_HANDLE_VALUE) {
-                DWORD bytesWritten;
-                int utf8Length = WideCharToMultiByte(CP_UTF8, 0, content.c_str(), -1, nullptr, 0, nullptr, nullptr);
-                if (utf8Length > 0) {
-                    std::string utf8Content(utf8Length - 1, '\0');
-                    WideCharToMultiByte(CP_UTF8, 0, content.c_str(), -1, &utf8Content[0], utf8Length, nullptr, nullptr);
-                    WriteFile(hFile, utf8Content.c_str(), static_cast<DWORD>(utf8Content.length()), &bytesWritten, nullptr);
-                }
-                CloseHandle(hFile);
-                PostMessage(m_hWnd, WM_SAVE_COMPLETED, 0, 0);
-            } else {
-                PostMessage(m_hWnd, WM_SAVE_ERROR, 0, reinterpret_cast<LPARAM>(new std::wstring(L"Ошибка создания файла")));
+
+    m_fileSaveService->SaveTreeAsync(
+        fileName,
+        currentPath,
+        depth,
+        format,
+        [this]() {
+            PostMessage(m_hWnd, WM_SAVE_COMPLETED, 0, 0);
+        },
+        [this](std::wstring&& error) {
+            std::wstring* saveError = new std::wstring(std::move(error));
+            if (!PostMessage(m_hWnd, WM_SAVE_ERROR, 0, reinterpret_cast<LPARAM>(saveError))) {
+                delete saveError;
             }
         }
-        catch (const std::exception& e) {
-            std::wstring error = L"Ошибка сохранения: ";
-            error += std::wstring(e.what(), e.what() + strlen(e.what()));
-            PostMessage(m_hWnd, WM_SAVE_ERROR, 0, reinterpret_cast<LPARAM>(new std::wstring(error)));
-        }
-    });
+    );
 }
 
 void Application::OnSaveCompleted() {
@@ -1130,125 +1100,6 @@ void Application::OnLButtonUp(LPARAM lParam) {
     }
 }
 
-void Application::DrawCustomButton(HDC hdc, HWND hBtn, const std::wstring& text, bool isPressed) {
-    RECT rect;
-    GetClientRect(hBtn, &rect);
-    
-    // Get animation alpha for smooth hover effect
-    float hoverAlpha = m_buttonHoverAlpha[hBtn];
-    
-    // Create memory DC for double buffering
-    HDC memDC = CreateCompatibleDC(hdc);
-    HBITMAP memBitmap = CreateCompatibleBitmap(hdc, rect.right - rect.left, rect.bottom - rect.top);
-    HBITMAP oldBitmap = static_cast<HBITMAP>(SelectObject(memDC, memBitmap));
-    
-    // Draw to memory DC
-    Graphics graphics(memDC);
-    graphics.SetSmoothingMode(SmoothingModeHighQuality);
-    graphics.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
-    graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
-    
-    // Set background to match parent card background exactly
-    graphics.Clear(Color(255, 45, 45, 45)); // Card background color
-
-    // Smooth color interpolation based on animation alpha
-    Color baseColor = Color(255, 68, 68, 68);      // Default
-    Color hoverColor = Color(255, 78, 78, 78);     // Hover
-    Color pressedColor = Color(255, 58, 58, 58);   // Pressed
-    
-    Color baseBorder = Color(255, 85, 85, 85);
-    Color hoverBorder = Color(255, 100, 100, 100);
-    Color pressedBorder = Color(255, 80, 80, 80);
-    
-    Color baseText = Color(255, 230, 230, 230);
-    Color hoverText = Color(255, 255, 255, 255);
-    Color pressedText = Color(255, 220, 220, 220);
-    
-    
-    // Interpolate colors based on hover animation alpha
-    Color bgColor, borderColor, textColor;
-    if (isPressed) {
-        bgColor = pressedColor;
-        borderColor = pressedBorder;
-        textColor = pressedText;
-    } else {
-        // Smooth interpolation between base and hover colors
-        BYTE bgR = static_cast<BYTE>(baseColor.GetRed() + (hoverColor.GetRed() - baseColor.GetRed()) * hoverAlpha);
-        BYTE bgG = static_cast<BYTE>(baseColor.GetGreen() + (hoverColor.GetGreen() - baseColor.GetGreen()) * hoverAlpha);
-        BYTE bgB = static_cast<BYTE>(baseColor.GetBlue() + (hoverColor.GetBlue() - baseColor.GetBlue()) * hoverAlpha);
-        bgColor = Color(255, bgR, bgG, bgB);
-        
-        BYTE borderR = static_cast<BYTE>(baseBorder.GetRed() + (hoverBorder.GetRed() - baseBorder.GetRed()) * hoverAlpha);
-        BYTE borderG = static_cast<BYTE>(baseBorder.GetGreen() + (hoverBorder.GetGreen() - baseBorder.GetGreen()) * hoverAlpha);
-        BYTE borderB = static_cast<BYTE>(baseBorder.GetBlue() + (hoverBorder.GetBlue() - baseBorder.GetBlue()) * hoverAlpha);
-        borderColor = Color(255, borderR, borderG, borderB);
-        
-        BYTE textR = static_cast<BYTE>(baseText.GetRed() + (hoverText.GetRed() - baseText.GetRed()) * hoverAlpha);
-        BYTE textG = static_cast<BYTE>(baseText.GetGreen() + (hoverText.GetGreen() - baseText.GetGreen()) * hoverAlpha);
-        BYTE textB = static_cast<BYTE>(baseText.GetBlue() + (hoverText.GetBlue() - baseText.GetBlue()) * hoverAlpha);
-        textColor = Color(255, textR, textG, textB);
-        
-    }
-    
-    // Flat design - no gradient, just solid color
-    SolidBrush bgBrush(bgColor);
-    
-    // Draw rounded rectangle with smaller radius for modern flat look
-    float radius = 4.0f;   // Smaller radius for flatter look
-    float x = 0.5f;        // Half-pixel offset for crisp borders
-    float y = 0.5f;        // Half-pixel offset for crisp borders
-    float width = static_cast<float>(rect.right) - 1.0f;
-    float height = static_cast<float>(rect.bottom) - 1.0f;
-
-    GraphicsPath path;
-
-    // Top-left corner
-    path.AddArc(x, y, radius * 2.0f, radius * 2.0f, 180.0f, 90.0f);
-    // Top line
-    path.AddLine(x + radius, y, x + width - radius, y);
-    // Top-right corner
-    path.AddArc(x + width - radius * 2.0f, y, radius * 2.0f, radius * 2.0f, 270.0f, 90.0f);
-    // Right line
-    path.AddLine(x + width, y + radius, x + width, y + height - radius);
-    // Bottom-right corner
-    path.AddArc(x + width - radius * 2.0f, y + height - radius * 2.0f, radius * 2.0f, radius * 2.0f, 0.0f, 90.0f);
-    // Bottom line
-    path.AddLine(x + width - radius, y + height, x + radius, y + height);
-    // Bottom-left corner
-    path.AddArc(x, y + height - radius * 2.0f, radius * 2.0f, radius * 2.0f, 90.0f, 90.0f);
-    // Left line (closes the path)
-    path.AddLine(x, y + height - radius, x, y + radius);
-
-    path.CloseFigure();
-
-    
-    graphics.FillPath(&bgBrush, &path);
-
-    // Draw very subtle border
-    Pen borderPen(borderColor, 1.0f);  // Thinner border for flat design
-    graphics.DrawPath(&borderPen, &path);
-    
-    // Draw text with system font (matching HTML font-family)
-    FontFamily fontFamily(L"Segoe UI");
-    Font font(&fontFamily, 12, FontStyleRegular, UnitPoint);
-    SolidBrush textBrush(textColor);
-    
-    RectF textRect(static_cast<REAL>(rect.left), static_cast<REAL>(rect.top), static_cast<REAL>(rect.right - rect.left), static_cast<REAL>(rect.bottom - rect.top));
-    StringFormat stringFormat;
-    stringFormat.SetAlignment(StringAlignmentCenter);
-    stringFormat.SetLineAlignment(StringAlignmentCenter);
-    
-    graphics.DrawString(text.c_str(), -1, &font, textRect, &stringFormat, &textBrush);
-    
-    // Copy from memory DC to screen DC (double buffering)
-    BitBlt(hdc, 0, 0, rect.right - rect.left, rect.bottom - rect.top, memDC, 0, 0, SRCCOPY);
-    
-    // Clean up memory objects
-    SelectObject(memDC, oldBitmap);
-    DeleteObject(memBitmap);
-    DeleteDC(memDC);
-}
-
 bool Application::IsPointInButton(HWND hBtn, POINT pt) {
     RECT btnRect;
     GetWindowRect(hBtn, &btnRect);
@@ -1287,97 +1138,10 @@ void Application::RedrawButtonDirect(HWND hBtn) {
         bool isPressed = (m_pressedButton == hBtn);
         
         // Draw directly over existing content
-        DrawCustomButton(hdc, hBtn, text, isPressed);
+        UiRenderer::DrawCustomButton(hdc, hBtn, text, isPressed, m_buttonHoverAlpha[hBtn]);
         
         ReleaseDC(hBtn, hdc);
     }
-}
-
-
-void Application::DrawBackground(HDC hdc, RECT rect) {
-    // Fill with main background color --bg-color: #1a1a1a
-    HBRUSH bgBrush = CreateSolidBrush(RGB(26, 26, 26));
-    FillRect(hdc, &rect, bgBrush);
-    DeleteObject(bgBrush);
-}
-
-void Application::DrawCard(HDC hdc, RECT rect, const std::wstring& title) {
-    Graphics graphics(hdc);
-    graphics.SetSmoothingMode(SmoothingModeHighQuality);
-    graphics.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
-    
-    // Card background color --card-bg: #2d2d2d
-    Color cardBg(255, 45, 45, 45);
-    Color borderColor(255, 64, 64, 64);  // --border-color: #404040
-    
-    // Create rounded rectangle path (8px radius like HTML)
-    GraphicsPath path;
-    int radius = 8;
-    path.AddArc(rect.left, rect.top, radius * 2, radius * 2, 180, 90);
-    path.AddArc(rect.right - radius * 2, rect.top, radius * 2, radius * 2, 270, 90);
-    path.AddArc(rect.right - radius * 2, rect.bottom - radius * 2, radius * 2, radius * 2, 0, 90);
-    path.AddArc(rect.left, rect.bottom - radius * 2, radius * 2, radius * 2, 90, 90);
-    path.CloseFigure();
-    
-    // Draw shadow first (--shadow: 0 2px 8px rgba(0,0,0,0.3))
-    GraphicsPath shadowPath;
-    int shadowOffset = 2;
-    shadowPath.AddArc(rect.left + shadowOffset, rect.top + shadowOffset, radius * 2, radius * 2, 180, 90);
-    shadowPath.AddArc(rect.right - radius * 2 + shadowOffset, rect.top + shadowOffset, radius * 2, radius * 2, 270, 90);
-    shadowPath.AddArc(rect.right - radius * 2 + shadowOffset, rect.bottom - radius * 2 + shadowOffset, radius * 2, radius * 2, 0, 90);
-    shadowPath.AddArc(rect.left + shadowOffset, rect.bottom - radius * 2 + shadowOffset, radius * 2, radius * 2, 90, 90);
-    shadowPath.CloseFigure();
-    
-    SolidBrush shadowBrush(Color(76, 0, 0, 0)); // rgba(0,0,0,0.3)
-    graphics.FillPath(&shadowBrush, &shadowPath);
-    
-    // Draw card background
-    SolidBrush cardBrush(cardBg);
-    graphics.FillPath(&cardBrush, &path);
-    
-    // Draw border
-    Pen borderPen(borderColor, 1.0f);
-    graphics.DrawPath(&borderPen, &path);
-    
-    // Draw title if provided
-    if (!title.empty()) {
-        FontFamily fontFamily(L"Segoe UI");
-        Font font(&fontFamily, 12, FontStyleBold, UnitPoint); // Bold font for better visibility
-        SolidBrush textBrush(Color(255, 255, 255, 255));     // White text for better contrast
-        
-        RectF titleRect(static_cast<REAL>(rect.left) + 16, static_cast<REAL>(rect.top) + 6, static_cast<REAL>(rect.right - rect.left - 32), 24);
-        StringFormat stringFormat;
-        stringFormat.SetAlignment(StringAlignmentNear);
-        stringFormat.SetLineAlignment(StringAlignmentCenter);
-        
-        graphics.DrawString(title.c_str(), -1, &font, titleRect, &stringFormat, &textBrush);
-    }
-}
-
-void Application::DrawEditBorder(HWND hEdit) {
-    if (!hEdit) return;
-    
-    RECT rect;
-    GetWindowRect(hEdit, &rect);
-    ScreenToClient(m_hWnd, (LPPOINT)&rect.left);
-    ScreenToClient(m_hWnd, (LPPOINT)&rect.right);
-    
-    HDC hdc = GetDC(m_hWnd);
-    
-    // Draw dark border around edit control
-    HPEN hPen = CreatePen(PS_SOLID, 1, RGB(64, 64, 64)); // Dark gray border
-    HPEN hOldPen = static_cast<HPEN>(SelectObject(hdc, hPen));
-    
-    // Draw border rectangle
-    MoveToEx(hdc, rect.left - 1, rect.top - 1, nullptr);
-    LineTo(hdc, rect.right, rect.top - 1);
-    LineTo(hdc, rect.right, rect.bottom);
-    LineTo(hdc, rect.left - 1, rect.bottom);
-    LineTo(hdc, rect.left - 1, rect.top - 1);
-    
-    SelectObject(hdc, hOldPen);
-    DeleteObject(hPen);
-    ReleaseDC(m_hWnd, hdc);
 }
 
 LRESULT CALLBACK Application::TreeCanvasSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
@@ -1591,39 +1355,6 @@ void Application::HandleMouseWheelScroll(int delta) {
         // Scroll down
         for (int i = 0; i < scrollLines; i++) {
             ScrollCanvas(1);
-        }
-    }
-}
-
-void Application::CleanupCanvasMemory() {
-    if (!m_hTreeCanvas) return;
-    
-    // Get current edit control memory handle
-    HLOCAL hOrgMem = reinterpret_cast<HLOCAL>(SendMessage(m_hTreeCanvas, EM_GETHANDLE, 0, 0));
-    if (!hOrgMem) return;
-    
-    SIZE_T sizeUsed = LocalSize(hOrgMem);
-    
-    // Calculate character size (always WCHAR for our case since we use UNICODE)
-    int cbCh = sizeof(WCHAR);
-    
-    // Get current text length
-    int textLength = GetWindowTextLength(m_hTreeCanvas);
-    
-    // Check if we should reduce size of buffer
-    if (sizeUsed > m_treeContent.capacity() && (static_cast<SIZE_T>(textLength * cbCh) < m_treeContent.capacity())) {
-        // Reallocate memory to smaller size
-        HLOCAL hNewMem = reinterpret_cast<HLOCAL>(LocalReAlloc(hOrgMem, m_treeContent.capacity(), LMEM_MOVEABLE));
-        if (hNewMem) {
-            // Zero full buffer for security
-            LPVOID pNewMem = LocalLock(hNewMem);
-            if (pNewMem) {
-                memset(pNewMem, 0, m_treeContent.capacity());
-                LocalUnlock(hNewMem);
-            }
-            
-            // Set new memory handle - reduces process memory
-            SendMessage(m_hTreeCanvas, EM_SETHANDLE, reinterpret_cast<WPARAM>(hNewMem), 0);
         }
     }
 }
