@@ -27,51 +27,201 @@ std::wstring DirectoryTreeBuilder::BuildTree(const std::wstring& rootPath, int m
             return L"Операция отменена";
         }
 
+        if (format == TreeFormat::TEXT) {
+            int processedCount = 0;
+            std::unordered_set<std::wstring> visitedPaths;
+            std::wstring result;
+            result.reserve(8192);
+
+            std::wstring rootName{path.filename().wstring()};
+            if (rootName.empty()) {
+                rootName = path.wstring();
+            }
+
+            result = std::move(rootName);
+            result += L"/\r\n";
+
+            struct SortableEntry {
+                std::filesystem::directory_entry entry;
+                bool isDirectory;
+                std::wstring lowerName;
+            };
+
+            std::error_code ec;
+            std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
+            std::filesystem::directory_iterator iterator(path, options, ec);
+            if (ec) {
+                return result;
+            }
+
+            std::vector<SortableEntry> entries;
+            for (const auto& entry : iterator) {
+                if (shouldCancel && shouldCancel()) {
+                    return L"Операция отменена";
+                }
+
+                std::error_code typeEc;
+                const bool isEntryDirectory = entry.is_directory(typeEc) && !typeEc;
+                std::wstring lowerName = entry.path().filename().wstring();
+                std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(),
+                               [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
+
+                entries.push_back(SortableEntry{entry, isEntryDirectory, std::move(lowerName)});
+            }
+
+            std::sort(entries.begin(), entries.end(),
+                      [](const SortableEntry& a, const SortableEntry& b) {
+                          if (a.isDirectory != b.isDirectory) {
+                              return a.isDirectory > b.isDirectory;
+                          }
+                          return a.lowerName < b.lowerName;
+                      });
+
+            for (size_t i = 0; i < entries.size(); ++i) {
+                if (shouldCancel && shouldCancel()) {
+                    return L"Операция отменена";
+                }
+
+                const bool isLast = (i == entries.size() - 1);
+                if (!RenderTreeFromPath(entries[i].entry.path(), L"", isLast, 1, maxDepth,
+                                        result, shouldCancel, progressCallback, processedCount, visitedPaths)) {
+                    return L"Операция отменена";
+                }
+            }
+
+            return result;
+        }
+
         int processedCount = 0;
         std::unordered_set<std::wstring> visitedPaths;
         TreeNode root = BuildNodeTree(
             path, 0, maxDepth,
             shouldCancel, progressCallback, processedCount, visitedPaths
         );
-        
+
         if (shouldCancel && shouldCancel()) {
             return L"Операция отменена";
         }
 
-        switch (format) {
-            case TreeFormat::JSON:
-                return RenderTreeAsJson(root);
-            case TreeFormat::XML:
-                return RenderTreeAsXml(root);
-            case TreeFormat::TEXT:
-            default:
-                {
-                    std::wstring result;
-                    result.reserve(8192); // Pre-allocate reasonable size
-                    
-                    std::wstring rootName{path.filename().wstring()};
-                    if (rootName.empty()) {
-                        rootName = path.wstring();
-                    }
-                    result = std::move(rootName);
-                    result += L"/\r\n";
-                    
-                    for (size_t i = 0; i < root.children.size(); ++i) {
-                        if (shouldCancel && shouldCancel()) {
-                            return L"Операция отменена";
-                        }
-                        
-                        bool isLast = (i == root.children.size() - 1);
-                        RenderTreeToBuffer(root.children[i], L"", isLast, result);
-                    }
-                    
-                    return result;
-                }
+        if (format == TreeFormat::JSON) {
+            return RenderTreeAsJson(root);
         }
+        return RenderTreeAsXml(root);
     }
     catch (const std::exception&) {
         return L"Ошибка при построении дерева директорий";
     }
+}
+
+bool DirectoryTreeBuilder::RenderTreeFromPath(const std::filesystem::path& path,
+                                              const std::wstring& prefix,
+                                              bool isLast,
+                                              int currentDepth,
+                                              int maxDepth,
+                                              std::wstring& out,
+                                              std::function<bool()> shouldCancel,
+                                              std::function<void(const std::wstring&)> progressCallback,
+                                              int& processedCount,
+                                              std::unordered_set<std::wstring>& visitedPaths) {
+    if (shouldCancel && shouldCancel()) {
+        return false;
+    }
+
+    std::error_code ec;
+    const bool isSymlink = std::filesystem::is_symlink(path, ec) && !ec;
+    ec.clear();
+    const bool isDirectory = std::filesystem::is_directory(path, ec) && !ec;
+    const std::wstring nodeName = path.filename().wstring();
+
+    out += prefix;
+    out += isLast ? TREE_LAST : TREE_BRANCH;
+    out += nodeName;
+    if (isDirectory) {
+        out += L"/";
+    }
+    out += L"\r\n";
+
+    ++processedCount;
+    if (progressCallback && processedCount % 10 == 0) {
+        std::wstring progress{L"Обработано элементов: "};
+        progress.reserve(progress.length() + 10);
+        progress += std::to_wstring(processedCount);
+        progressCallback(progress);
+    }
+
+    if (isSymlink || !isDirectory || (maxDepth >= 0 && currentDepth >= maxDepth)) {
+        return true;
+    }
+
+    std::filesystem::path normalizedPath = std::filesystem::weakly_canonical(path, ec);
+    if (ec) {
+        ec.clear();
+        normalizedPath = std::filesystem::absolute(path, ec);
+        if (ec) {
+            normalizedPath = path;
+        }
+    }
+    const std::wstring pathKey = normalizedPath.lexically_normal().wstring();
+    if (visitedPaths.find(pathKey) != visitedPaths.end()) {
+        return true;
+    }
+    visitedPaths.insert(pathKey);
+
+    struct SortableEntry {
+        std::filesystem::directory_entry entry;
+        bool isDirectory;
+        std::wstring lowerName;
+    };
+
+    std::vector<SortableEntry> entries;
+    std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
+    std::filesystem::directory_iterator iterator(path, options, ec);
+    if (ec) {
+        visitedPaths.erase(pathKey);
+        return true;
+    }
+
+    for (const auto& entry : iterator) {
+        if (shouldCancel && shouldCancel()) {
+            visitedPaths.erase(pathKey);
+            return false;
+        }
+
+        std::error_code typeEc;
+        const bool isEntryDirectory = entry.is_directory(typeEc) && !typeEc;
+        std::wstring lowerName = entry.path().filename().wstring();
+        std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(),
+                       [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
+
+        entries.push_back(SortableEntry{entry, isEntryDirectory, std::move(lowerName)});
+    }
+
+    std::sort(entries.begin(), entries.end(),
+              [](const SortableEntry& a, const SortableEntry& b) {
+                  if (a.isDirectory != b.isDirectory) {
+                      return a.isDirectory > b.isDirectory;
+                  }
+                  return a.lowerName < b.lowerName;
+              });
+
+    const std::wstring childPrefix = prefix + (isLast ? TREE_SPACE : TREE_VERTICAL);
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (shouldCancel && shouldCancel()) {
+            visitedPaths.erase(pathKey);
+            return false;
+        }
+
+        const bool childIsLast = (i == entries.size() - 1);
+        if (!RenderTreeFromPath(entries[i].entry.path(), childPrefix, childIsLast,
+                                currentDepth + 1, maxDepth, out, shouldCancel,
+                                progressCallback, processedCount, visitedPaths)) {
+            visitedPaths.erase(pathKey);
+            return false;
+        }
+    }
+
+    visitedPaths.erase(pathKey);
+    return true;
 }
 
 TreeNode DirectoryTreeBuilder::BuildNodeTree(const std::filesystem::path& path, int currentDepth, int maxDepth,

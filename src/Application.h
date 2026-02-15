@@ -6,6 +6,7 @@
 #include <map>
 #include <atomic>
 #include <functional>
+#include <cstddef>
 
 class SystemTray;
 class GlobalHotkeys;
@@ -64,6 +65,9 @@ private:
     void SaveFileSync(std::wstring&& fileName, const std::wstring& content);
     void SaveFileAsync(std::wstring&& fileName, TreeFormat format);
     void UpdateCurrentPath();
+    void CompactTreeBuffersForNextBuild(int nextDepth);
+    void RecreateTreeCanvasControl();
+    void TrimProcessMemoryUsage();
     void ShowStatusMessage(const std::wstring& message);
     void ShowPersistentStatusMessage(const std::wstring& message);
     void ShowHelpMenu();
@@ -95,6 +99,8 @@ private:
     std::unique_ptr<FileSaveService> m_fileSaveService;
 
     std::wstring m_treeContent;
+    size_t m_previousTreeSizeBeforeBuild;
+    size_t m_previousTreeCapacityBeforeBuild;
     int m_currentDepth;
     bool m_isMinimized;
     bool m_isDefaultDepthValue;

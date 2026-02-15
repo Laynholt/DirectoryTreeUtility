@@ -34,6 +34,17 @@ public:
                                std::function<void(const std::wstring&)> progressCallback = nullptr);
 
 private:
+    bool RenderTreeFromPath(const std::filesystem::path& path,
+                            const std::wstring& prefix,
+                            bool isLast,
+                            int currentDepth,
+                            int maxDepth,
+                            std::wstring& out,
+                            std::function<bool()> shouldCancel,
+                            std::function<void(const std::wstring&)> progressCallback,
+                            int& processedCount,
+                            std::unordered_set<std::wstring>& visitedPaths);
+
     TreeNode BuildNodeTree(const std::filesystem::path& path, int currentDepth, int maxDepth,
                                  std::function<bool()> shouldCancel,
                                  std::function<void(const std::wstring&)> progressCallback,

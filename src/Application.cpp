@@ -11,6 +11,8 @@
 #include <windowsx.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <malloc.h>
+#include <psapi.h>
 #include <richedit.h>
 #include <gdiplus.h>
 #include <uxtheme.h>
@@ -18,6 +20,7 @@
 #pragma comment(lib, "comctl32.lib")
 
 #pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "psapi.lib")
 #pragma comment(lib, "uxtheme.lib")
 
 using namespace Gdiplus;
@@ -55,6 +58,8 @@ struct InfoWindowState {
 };
 
 HMODULE g_richEditModule = nullptr;
+constexpr size_t TREE_LARGE_CHARS_THRESHOLD = 400000;
+constexpr size_t TREE_SHRINK_FACTOR = 4;
 
 const wchar_t* GetHelpMenuItemText(UINT itemId) {
     switch (itemId) {
@@ -154,6 +159,8 @@ Application::Application()
     , m_hHotkeysWindow(nullptr)
     , m_hAboutWindow(nullptr)
     , m_hMainMenu(nullptr)
+    , m_previousTreeSizeBeforeBuild(0)
+    , m_previousTreeCapacityBeforeBuild(0)
     , m_currentDepth(1)
     , m_isMinimized(false)
     , m_isDefaultDepthValue(true)
@@ -380,6 +387,7 @@ void Application::CreateControls() {
         CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas"
     );
     SendMessage(m_hTreeCanvas, WM_SETFONT, reinterpret_cast<WPARAM>(m_hMonoFont), MAKELPARAM(FALSE, 0));
+    SendMessage(m_hTreeCanvas, EM_SETUNDOLIMIT, 0, 0);
 
     m_hInfoFont = CreateFont(
         -15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
@@ -1061,6 +1069,85 @@ void Application::OnKeyDown(WPARAM key, LPARAM) {
     }
 }
 
+void Application::CompactTreeBuffersForNextBuild(int nextDepth) {
+    UNREFERENCED_PARAMETER(nextDepth);
+
+    const size_t previousSize = m_treeContent.size();
+    const size_t previousCapacity = m_treeContent.capacity();
+    const bool hadLargeStorage = previousCapacity > TREE_LARGE_CHARS_THRESHOLD;
+    const bool shouldShrinkTreeStorage = hadLargeStorage || previousSize > TREE_LARGE_CHARS_THRESHOLD;
+
+    m_treeContent.clear();
+    if (shouldShrinkTreeStorage) {
+        std::wstring().swap(m_treeContent);
+    }
+
+    const bool shouldRecreateCanvas = previousSize > TREE_LARGE_CHARS_THRESHOLD;
+    if (shouldRecreateCanvas) {
+        RecreateTreeCanvasControl();
+    } else if (m_hTreeCanvas && IsWindow(m_hTreeCanvas)) {
+        SetWindowText(m_hTreeCanvas, L"");
+        SendMessage(m_hTreeCanvas, EM_EMPTYUNDOBUFFER, 0, 0);
+    }
+
+    if (shouldShrinkTreeStorage || shouldRecreateCanvas) {
+        TrimProcessMemoryUsage();
+    }
+}
+
+void Application::RecreateTreeCanvasControl() {
+    if (!m_hTreeCanvas || !IsWindow(m_hTreeCanvas)) {
+        return;
+    }
+
+    RECT canvasRect = {};
+    GetWindowRect(m_hTreeCanvas, &canvasRect);
+    ScreenToClient(m_hWnd, reinterpret_cast<LPPOINT>(&canvasRect.left));
+    ScreenToClient(m_hWnd, reinterpret_cast<LPPOINT>(&canvasRect.right));
+
+    HWND previousCanvas = m_hTreeCanvas;
+    HWND newCanvas = CreateWindowEx(
+        0,
+        L"EDIT",
+        L"",
+        WS_VISIBLE | WS_CHILD | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL,
+        canvasRect.left,
+        canvasRect.top,
+        canvasRect.right - canvasRect.left,
+        canvasRect.bottom - canvasRect.top,
+        m_hWnd,
+        reinterpret_cast<HMENU>(ID_TREE_CANVAS),
+        m_hInstance,
+        nullptr
+    );
+
+    if (!newCanvas) {
+        SetWindowText(previousCanvas, L"");
+        SendMessage(previousCanvas, EM_EMPTYUNDOBUFFER, 0, 0);
+        return;
+    }
+
+    if (m_hMonoFont) {
+        SendMessage(newCanvas, WM_SETFONT, reinterpret_cast<WPARAM>(m_hMonoFont), MAKELPARAM(FALSE, 0));
+    }
+    SendMessage(newCanvas, EM_SETUNDOLIMIT, 0, 0);
+    SendMessage(newCanvas, EM_EMPTYUNDOBUFFER, 0, 0);
+    SetWindowSubclass(newCanvas, TreeCanvasSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
+
+    RemoveWindowSubclass(previousCanvas, TreeCanvasSubclassProc, 1);
+    DestroyWindow(previousCanvas);
+    m_hTreeCanvas = newCanvas;
+}
+
+void Application::TrimProcessMemoryUsage() {
+    _heapmin();
+    HeapCompact(GetProcessHeap(), 0);
+
+    HANDLE process = GetCurrentProcess();
+    SetProcessWorkingSetSize(process, static_cast<SIZE_T>(-1), static_cast<SIZE_T>(-1));
+    EmptyWorkingSet(process);
+}
+
 void Application::GenerateTree() {
     // Cancel any running generation
     CancelGeneration();
@@ -1073,8 +1160,14 @@ void Application::GenerateTree() {
 }
 
 void Application::GenerateTreeAsync() {
-    // Clear previous tree content from memory
-    m_treeContent.clear();
+    // Get generation parameters before compaction to decide if we should shrink aggressively.
+    wchar_t depthBuffer[32];
+    GetWindowText(m_hDepthEdit, depthBuffer, 32);
+    const int depth = _wtoi(depthBuffer);
+
+    m_previousTreeSizeBeforeBuild = m_treeContent.size();
+    m_previousTreeCapacityBeforeBuild = m_treeContent.capacity();
+    CompactTreeBuffersForNextBuild(depth);
     
     // Mark as generating
     m_isGenerating = true;
@@ -1088,11 +1181,8 @@ void Application::GenerateTreeAsync() {
     
     // Show initial progress message
     SetWindowText(m_hTreeCanvas, L"Генерируется дерево");
+    SendMessage(m_hTreeCanvas, EM_EMPTYUNDOBUFFER, 0, 0);
     
-    // Get generation parameters
-    wchar_t depthBuffer[32];
-    GetWindowText(m_hDepthEdit, depthBuffer, 32);
-    int depth = _wtoi(depthBuffer);
     std::wstring currentPath = GetCurrentWorkingPath();
 
     if (!m_treeGenerationService) {
@@ -1139,9 +1229,30 @@ void Application::OnTreeGenerationCompleted(const std::wstring& result) {
     KillTimer(m_hWnd, PROGRESS_TIMER_ID);
 
     m_treeContent = result;
+    if (m_treeContent.capacity() > TREE_LARGE_CHARS_THRESHOLD &&
+        m_treeContent.size() < (m_treeContent.capacity() / TREE_SHRINK_FACTOR)) {
+        std::wstring compact(m_treeContent);
+        m_treeContent.swap(compact);
+    }
+
+    const bool droppedByAbsoluteThreshold =
+        m_previousTreeSizeBeforeBuild > m_treeContent.size() &&
+        (m_previousTreeSizeBeforeBuild - m_treeContent.size()) > TREE_LARGE_CHARS_THRESHOLD;
+    const bool droppedByFactor =
+        m_previousTreeSizeBeforeBuild > TREE_LARGE_CHARS_THRESHOLD &&
+        m_treeContent.size() < (m_previousTreeSizeBeforeBuild / TREE_SHRINK_FACTOR);
+    const bool droppedFromLargeTree = droppedByAbsoluteThreshold || droppedByFactor;
+    if (droppedFromLargeTree || m_previousTreeCapacityBeforeBuild > TREE_LARGE_CHARS_THRESHOLD) {
+        RecreateTreeCanvasControl();
+    }
     
     // Update UI first
-    SetWindowText(m_hTreeCanvas, result.c_str());
+    SetWindowText(m_hTreeCanvas, m_treeContent.c_str());
+    SendMessage(m_hTreeCanvas, EM_EMPTYUNDOBUFFER, 0, 0);
+    const bool shouldTrimAfterCompletion = droppedFromLargeTree;
+    if (shouldTrimAfterCompletion) {
+        TrimProcessMemoryUsage();
+    }
     
     // Then show status message after tree is displayed
     ShowStatusMessage(L"Дерево директорий построено");
@@ -1165,6 +1276,8 @@ void Application::OnTreeGenerationError(const std::wstring& error) {
     
     // Update UI
     SetWindowText(m_hTreeCanvas, error.c_str());
+    SendMessage(m_hTreeCanvas, EM_EMPTYUNDOBUFFER, 0, 0);
+    TrimProcessMemoryUsage();
     ShowStatusMessage(L"Ошибка при построении дерева");
     
     // Re-enable generate button
