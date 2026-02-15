@@ -30,6 +30,7 @@ public:
     ~DirectoryTreeBuilder();
 
     std::wstring BuildTree(const std::wstring& rootPath, int maxDepth, TreeFormat format,
+                               bool expandSymlinks = false,
                                std::function<bool()> shouldCancel = nullptr,
                                std::function<void(const std::wstring&)> progressCallback = nullptr);
 
@@ -39,6 +40,7 @@ private:
                             bool isLast,
                             int currentDepth,
                             int maxDepth,
+                            bool expandSymlinks,
                             std::wstring& out,
                             std::function<bool()> shouldCancel,
                             std::function<void(const std::wstring&)> progressCallback,
@@ -46,6 +48,7 @@ private:
                             std::unordered_set<std::wstring>& visitedPaths);
 
     TreeNode BuildNodeTree(const std::filesystem::path& path, int currentDepth, int maxDepth,
+                                 bool expandSymlinks,
                                  std::function<bool()> shouldCancel,
                                  std::function<void(const std::wstring&)> progressCallback,
                                  int& processedCount,

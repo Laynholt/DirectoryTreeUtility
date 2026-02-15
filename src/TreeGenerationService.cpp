@@ -14,19 +14,20 @@ TreeGenerationService::~TreeGenerationService() {
     Cancel();
 }
 
-void TreeGenerationService::Start(const std::wstring& rootPath, int depth, CompletionCallback onCompleted, ErrorCallback onError, ProgressCallback onProgress) {
+void TreeGenerationService::Start(const std::wstring& rootPath, int depth, bool expandSymlinks, CompletionCallback onCompleted, ErrorCallback onError, ProgressCallback onProgress) {
     Cancel();
 
     m_cancelRequested.store(false);
     m_running.store(true);
 
-    m_worker = std::thread([this, rootPath, depth, onCompleted = std::move(onCompleted), onError = std::move(onError), onProgress = std::move(onProgress)]() mutable {
+    m_worker = std::thread([this, rootPath, depth, expandSymlinks, onCompleted = std::move(onCompleted), onError = std::move(onError), onProgress = std::move(onProgress)]() mutable {
         try {
             DirectoryTreeBuilder builder;
             std::wstring result = builder.BuildTree(
                 rootPath,
                 depth,
                 TreeFormat::TEXT,
+                expandSymlinks,
                 [this]() { return m_cancelRequested.load(); },
                 onProgress
             );

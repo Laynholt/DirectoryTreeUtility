@@ -14,7 +14,7 @@ public:
     TreeGenerationService();
     ~TreeGenerationService();
 
-    void Start(const std::wstring& rootPath, int depth, CompletionCallback onCompleted, ErrorCallback onError, ProgressCallback onProgress = {});
+    void Start(const std::wstring& rootPath, int depth, bool expandSymlinks, CompletionCallback onCompleted, ErrorCallback onError, ProgressCallback onProgress = {});
     void Cancel();
     bool IsRunning() const;
 

@@ -41,6 +41,7 @@ enum ControlIDs {
     ID_TREE_CANVAS = 1007,
     ID_INFO_TEXT = 1008,
     ID_INFO_CLOSE = 1009,
+    ID_EXPAND_SYMLINKS_CHECK = 1010,
     ID_MENU_HELP_HOTKEYS = 2001,
     ID_MENU_HELP_ABOUT = 2002
 };
@@ -154,6 +155,7 @@ Application::Application()
     , m_hCopyBtn(nullptr)
     , m_hSaveBtn(nullptr)
     , m_hHelpBtn(nullptr)
+    , m_hExpandSymlinksCheck(nullptr)
     , m_hTreeCanvas(nullptr)
     , m_hStatusLabel(nullptr)
     , m_hHotkeysWindow(nullptr)
@@ -161,6 +163,7 @@ Application::Application()
     , m_hMainMenu(nullptr)
     , m_previousTreeSizeBeforeBuild(0)
     , m_previousTreeCapacityBeforeBuild(0)
+    , m_expandSymlinks(false)
     , m_currentDepth(1)
     , m_isMinimized(false)
     , m_isDefaultDepthValue(true)
@@ -347,6 +350,18 @@ void Application::CreateControls() {
                                WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
                                658, 16, 106, 24, m_hWnd, reinterpret_cast<HMENU>(ID_HELP_BTN), m_hInstance, nullptr);
 
+    m_hExpandSymlinksCheck = CreateWindowEx(
+        0,
+        L"BUTTON",
+        L"Раскрывать симлинки",
+        WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP,
+        300, 18, 220, 24,
+        m_hWnd,
+        reinterpret_cast<HMENU>(ID_EXPAND_SYMLINKS_CHECK),
+        m_hInstance,
+        nullptr
+    );
+
     // Tree canvas positioned inside tree card - scrollbars appear automatically when needed
     m_hTreeCanvas = CreateWindowEx(0, L"EDIT", L"",
                                   WS_VISIBLE | WS_CHILD |
@@ -368,6 +383,7 @@ void Application::CreateControls() {
     SendMessage(m_hDepthEdit, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), MAKELPARAM(FALSE, 0));
     SendMessage(m_hPathEdit, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), MAKELPARAM(FALSE, 0));
     SendMessage(m_hHelpBtn, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), MAKELPARAM(FALSE, 0));
+    SendMessage(m_hExpandSymlinksCheck, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), MAKELPARAM(FALSE, 0));
     SendMessage(m_hStatusLabel, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), MAKELPARAM(FALSE, 0));
     
     // Apply font to static labels too
@@ -604,11 +620,20 @@ LRESULT CALLBACK Application::WindowProc(HWND hWnd, UINT message, WPARAM wParam,
 LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_COMMAND:
-        if (HIWORD(wParam) == EN_SETFOCUS && reinterpret_cast<HWND>(lParam) == m_hDepthEdit) {
-            // When depth edit gets focus, select all text for easy replacement
-            SendMessage(m_hDepthEdit, EM_SETSEL, 0, -1);
+        {
+            const UINT commandId = LOWORD(wParam);
+            const UINT notificationCode = HIWORD(wParam);
+
+            if (notificationCode == EN_SETFOCUS && reinterpret_cast<HWND>(lParam) == m_hDepthEdit) {
+                // When depth edit gets focus, select all text for easy replacement
+                SendMessage(m_hDepthEdit, EM_SETSEL, 0, -1);
+            }
+            if (commandId == ID_EXPAND_SYMLINKS_CHECK && notificationCode != BN_CLICKED) {
+                return 0;
+            }
+
+            OnCommand(commandId);
         }
-        OnCommand(LOWORD(wParam));
         break;
 
     case WM_MEASUREITEM:
@@ -643,6 +668,22 @@ LRESULT Application::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         {
             DRAWITEMSTRUCT* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
             if (dis->CtlType == ODT_BUTTON) {
+                if (dis->CtlID == ID_EXPAND_SYMLINKS_CHECK) {
+                    wchar_t checkboxText[256];
+                    GetWindowText(dis->hwndItem, checkboxText, 256);
+                    UiRenderer::DrawCustomCheckbox(
+                        dis->hDC,
+                        dis->hwndItem,
+                        checkboxText,
+                        m_expandSymlinks,
+                        (dis->itemState & ODS_HOTLIGHT) != 0,
+                        (dis->itemState & ODS_SELECTED) != 0,
+                        (dis->itemState & ODS_DISABLED) == 0,
+                        (dis->itemState & ODS_FOCUS) != 0
+                    );
+                    return TRUE;
+                }
+
                 std::wstring buttonText;
                 wchar_t text[256];
                 GetWindowText(dis->hwndItem, text, 256);
@@ -966,6 +1007,48 @@ void Application::OnResize(int width, int height) {
         const int pathRight = helpButtonX - 16;
         const int pathWidth = (pathRight > pathX) ? (pathRight - pathX) : 120;
         MoveWindow(m_hPathEdit, pathX, 46, pathWidth, 24, TRUE);
+
+        const int depthEditRight = 174 + 80;
+        const int checkboxMinLeft = depthEditRight + 16;
+        const int checkboxMaxRight = helpButtonX - 16;
+        int checkboxWidth = 220;
+        if (m_hExpandSymlinksCheck && IsWindow(m_hExpandSymlinksCheck)) {
+            wchar_t checkboxText[128] = {};
+            GetWindowText(m_hExpandSymlinksCheck, checkboxText, 128);
+
+            HDC hdc = GetDC(m_hWnd);
+            if (hdc) {
+                HFONT oldFont = nullptr;
+                if (m_hFont) {
+                    oldFont = static_cast<HFONT>(SelectObject(hdc, m_hFont));
+                }
+
+                SIZE textSize = {};
+                GetTextExtentPoint32(hdc, checkboxText, lstrlenW(checkboxText), &textSize);
+                checkboxWidth = textSize.cx + 42; // checkbox square + gaps + right padding
+
+                if (oldFont) {
+                    SelectObject(hdc, oldFont);
+                }
+                ReleaseDC(m_hWnd, hdc);
+            }
+        }
+
+        const int availableCheckboxWidth = checkboxMaxRight - checkboxMinLeft;
+        if (checkboxWidth > availableCheckboxWidth) {
+            checkboxWidth = availableCheckboxWidth;
+        }
+        int checkboxX = (width - checkboxWidth) / 2;
+        if (checkboxX < checkboxMinLeft) {
+            checkboxX = checkboxMinLeft;
+        }
+        if (checkboxX + checkboxWidth > checkboxMaxRight) {
+            checkboxX = checkboxMaxRight - checkboxWidth;
+        }
+        if (checkboxX < checkboxMinLeft) {
+            checkboxX = checkboxMinLeft;
+        }
+        MoveWindow(m_hExpandSymlinksCheck, checkboxX, 16, checkboxWidth, 24, TRUE);
         
         // Center buttons in the button card with larger sizes
         int totalButtonWidth = 170 + 150 + 150 + 20; // buttons + gaps
@@ -1027,6 +1110,12 @@ void Application::OnCommand(int commandId) {
         break;
     case ID_SAVE_BTN:
         SaveToFile();
+        break;
+    case ID_EXPAND_SYMLINKS_CHECK:
+        m_expandSymlinks = !m_expandSymlinks;
+        InvalidateRect(m_hExpandSymlinksCheck, nullptr, FALSE);
+        UpdateWindow(m_hExpandSymlinksCheck);
+        ShowStatusMessage(m_expandSymlinks ? L"Раскрытие симлинков включено" : L"Раскрытие симлинков выключено");
         break;
     case ID_MENU_HELP_HOTKEYS:
         ShowHotkeysWindow();
@@ -1193,6 +1282,7 @@ void Application::GenerateTreeAsync() {
     m_treeGenerationService->Start(
         currentPath,
         depth,
+        IsExpandSymlinksEnabled(),
         [this](std::wstring&& result) {
             std::wstring* completedResult = new std::wstring(std::move(result));
             if (!PostMessage(m_hWnd, WM_TREE_COMPLETED, 0, reinterpret_cast<LPARAM>(completedResult))) {
@@ -1416,6 +1506,7 @@ void Application::SaveFileAsync(std::wstring&& fileName, TreeFormat format) {
         currentPath,
         depth,
         format,
+        IsExpandSymlinksEnabled(),
         [this]() {
             PostMessage(m_hWnd, WM_SAVE_COMPLETED, 0, 0);
         },
@@ -2016,5 +2107,9 @@ void Application::HandleMouseWheelScroll(int delta) {
             ScrollCanvas(1);
         }
     }
+}
+
+bool Application::IsExpandSymlinksEnabled() const {
+    return m_expandSymlinks;
 }
 

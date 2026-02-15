@@ -16,7 +16,7 @@ public:
     ~FileSaveService();
 
     bool SaveTextFileSync(const std::wstring& fileName, const std::wstring& content, std::wstring* errorMessage = nullptr) const;
-    void SaveTreeAsync(const std::wstring& fileName, const std::wstring& rootPath, int depth, TreeFormat format, CompletionCallback onCompleted, ErrorCallback onError);
+    void SaveTreeAsync(const std::wstring& fileName, const std::wstring& rootPath, int depth, TreeFormat format, bool expandSymlinks, CompletionCallback onCompleted, ErrorCallback onError);
     void Cancel();
     bool IsRunning() const;
 

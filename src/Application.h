@@ -78,6 +78,7 @@ private:
     void ScrollCanvas(int direction); // 0=up, 1=down, 2=left, 3=right
     std::wstring GetCurrentWorkingPath();
     void HandleMouseWheelScroll(int delta);
+    bool IsExpandSymlinksEnabled() const;
 
     HINSTANCE m_hInstance;
     HWND m_hWnd;
@@ -87,6 +88,7 @@ private:
     HWND m_hCopyBtn;
     HWND m_hSaveBtn;
     HWND m_hHelpBtn;
+    HWND m_hExpandSymlinksCheck;
     HWND m_hTreeCanvas;
     HWND m_hStatusLabel;
     HWND m_hHotkeysWindow;
@@ -101,6 +103,7 @@ private:
     std::wstring m_treeContent;
     size_t m_previousTreeSizeBeforeBuild;
     size_t m_previousTreeCapacityBeforeBuild;
+    bool m_expandSymlinks;
     int m_currentDepth;
     bool m_isMinimized;
     bool m_isDefaultDepthValue;

@@ -20,16 +20,16 @@ bool FileSaveService::SaveTextFileSync(const std::wstring& fileName, const std::
     return WriteUtf8File(fileName, content, errorMessage);
 }
 
-void FileSaveService::SaveTreeAsync(const std::wstring& fileName, const std::wstring& rootPath, int depth, TreeFormat format, CompletionCallback onCompleted, ErrorCallback onError) {
+void FileSaveService::SaveTreeAsync(const std::wstring& fileName, const std::wstring& rootPath, int depth, TreeFormat format, bool expandSymlinks, CompletionCallback onCompleted, ErrorCallback onError) {
     Cancel();
 
     m_cancelRequested.store(false);
     m_running.store(true);
 
-    m_worker = std::thread([this, fileName, rootPath, depth, format, onCompleted = std::move(onCompleted), onError = std::move(onError)]() mutable {
+    m_worker = std::thread([this, fileName, rootPath, depth, format, expandSymlinks, onCompleted = std::move(onCompleted), onError = std::move(onError)]() mutable {
         try {
             DirectoryTreeBuilder builder;
-            std::wstring content = builder.BuildTree(rootPath, depth, format);
+            std::wstring content = builder.BuildTree(rootPath, depth, format, expandSymlinks);
             if (m_cancelRequested.load()) {
                 m_running.store(false);
                 return;

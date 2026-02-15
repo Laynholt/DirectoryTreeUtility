@@ -15,6 +15,7 @@ DirectoryTreeBuilder::~DirectoryTreeBuilder() {
 }
 
 std::wstring DirectoryTreeBuilder::BuildTree(const std::wstring& rootPath, int maxDepth, TreeFormat format,
+                                                  bool expandSymlinks,
                                                   std::function<bool()> shouldCancel,
                                                   std::function<void(const std::wstring&)> progressCallback) {
     try {
@@ -84,6 +85,7 @@ std::wstring DirectoryTreeBuilder::BuildTree(const std::wstring& rootPath, int m
 
                 const bool isLast = (i == entries.size() - 1);
                 if (!RenderTreeFromPath(entries[i].entry.path(), L"", isLast, 1, maxDepth,
+                                        expandSymlinks,
                                         result, shouldCancel, progressCallback, processedCount, visitedPaths)) {
                     return L"Операция отменена";
                 }
@@ -95,7 +97,7 @@ std::wstring DirectoryTreeBuilder::BuildTree(const std::wstring& rootPath, int m
         int processedCount = 0;
         std::unordered_set<std::wstring> visitedPaths;
         TreeNode root = BuildNodeTree(
-            path, 0, maxDepth,
+            path, 0, maxDepth, expandSymlinks,
             shouldCancel, progressCallback, processedCount, visitedPaths
         );
 
@@ -118,6 +120,7 @@ bool DirectoryTreeBuilder::RenderTreeFromPath(const std::filesystem::path& path,
                                               bool isLast,
                                               int currentDepth,
                                               int maxDepth,
+                                              bool expandSymlinks,
                                               std::wstring& out,
                                               std::function<bool()> shouldCancel,
                                               std::function<void(const std::wstring&)> progressCallback,
@@ -149,7 +152,7 @@ bool DirectoryTreeBuilder::RenderTreeFromPath(const std::filesystem::path& path,
         progressCallback(progress);
     }
 
-    if (isSymlink || !isDirectory || (maxDepth >= 0 && currentDepth >= maxDepth)) {
+    if ((!expandSymlinks && isSymlink) || !isDirectory || (maxDepth >= 0 && currentDepth >= maxDepth)) {
         return true;
     }
 
@@ -213,7 +216,7 @@ bool DirectoryTreeBuilder::RenderTreeFromPath(const std::filesystem::path& path,
 
         const bool childIsLast = (i == entries.size() - 1);
         if (!RenderTreeFromPath(entries[i].entry.path(), childPrefix, childIsLast,
-                                currentDepth + 1, maxDepth, out, shouldCancel,
+                                currentDepth + 1, maxDepth, expandSymlinks, out, shouldCancel,
                                 progressCallback, processedCount, visitedPaths)) {
             visitedPaths.erase(pathKey);
             return false;
@@ -225,6 +228,7 @@ bool DirectoryTreeBuilder::RenderTreeFromPath(const std::filesystem::path& path,
 }
 
 TreeNode DirectoryTreeBuilder::BuildNodeTree(const std::filesystem::path& path, int currentDepth, int maxDepth,
+                                                   bool expandSymlinks,
                                                    std::function<bool()> shouldCancel,
                                                    std::function<void(const std::wstring&)> progressCallback,
                                                    int& processedCount,
@@ -313,7 +317,7 @@ TreeNode DirectoryTreeBuilder::BuildNodeTree(const std::filesystem::path& path, 
             }
 
             std::error_code symlinkEc;
-            if (sortableEntry.entry.is_symlink(symlinkEc) && !symlinkEc) {
+            if (!expandSymlinks && sortableEntry.entry.is_symlink(symlinkEc) && !symlinkEc) {
                 std::error_code targetTypeEc;
                 const bool targetIsDirectory = sortableEntry.entry.is_directory(targetTypeEc) && !targetTypeEc;
                 node.children.emplace_back(sortableEntry.entry.path().filename().wstring(), targetIsDirectory);
@@ -327,7 +331,8 @@ TreeNode DirectoryTreeBuilder::BuildNodeTree(const std::filesystem::path& path, 
                 continue;
             }
             
-            node.children.emplace_back(BuildNodeTree(sortableEntry.entry.path(), currentDepth + 1, maxDepth, 
+            node.children.emplace_back(BuildNodeTree(sortableEntry.entry.path(), currentDepth + 1, maxDepth,
+                                                         expandSymlinks,
                                                          shouldCancel, progressCallback, processedCount, visitedPaths));
             
             // Update progress

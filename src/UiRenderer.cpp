@@ -102,6 +102,76 @@ void UiRenderer::DrawCustomButton(HDC hdc, HWND button, const std::wstring& text
     DeleteDC(memDC);
 }
 
+void UiRenderer::DrawCustomCheckbox(HDC hdc, HWND control, const std::wstring& text, bool checked, bool hot, bool pressed, bool enabled, bool focused) {
+    RECT rect;
+    GetClientRect(control, &rect);
+
+    HDC memDC = CreateCompatibleDC(hdc);
+    HBITMAP memBitmap = CreateCompatibleBitmap(hdc, rect.right - rect.left, rect.bottom - rect.top);
+    HBITMAP oldBitmap = static_cast<HBITMAP>(SelectObject(memDC, memBitmap));
+
+    Graphics graphics(memDC);
+    graphics.SetSmoothingMode(SmoothingModeHighQuality);
+    graphics.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
+    graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
+    graphics.Clear(Color(255, 45, 45, 45));
+
+    const Color textColor = enabled ? Color(255, 235, 235, 235) : Color(255, 145, 145, 145);
+    const Color boxBg = pressed ? Color(255, 35, 35, 35) : (hot ? Color(255, 50, 50, 50) : Color(255, 40, 40, 40));
+    const Color boxBorder = checked ? Color(255, 135, 170, 220) : Color(255, 92, 92, 92);
+
+    const REAL boxSize = 14.0f;
+    const REAL boxX = 6.0f;
+    const REAL boxY = (static_cast<REAL>(rect.bottom - rect.top) - boxSize) * 0.5f;
+
+    GraphicsPath boxPath;
+    const REAL radius = 3.0f;
+    boxPath.AddArc(boxX, boxY, radius * 2.0f, radius * 2.0f, 180.0f, 90.0f);
+    boxPath.AddArc(boxX + boxSize - radius * 2.0f, boxY, radius * 2.0f, radius * 2.0f, 270.0f, 90.0f);
+    boxPath.AddArc(boxX + boxSize - radius * 2.0f, boxY + boxSize - radius * 2.0f, radius * 2.0f, radius * 2.0f, 0.0f, 90.0f);
+    boxPath.AddArc(boxX, boxY + boxSize - radius * 2.0f, radius * 2.0f, radius * 2.0f, 90.0f, 90.0f);
+    boxPath.CloseFigure();
+
+    SolidBrush boxBrush(boxBg);
+    graphics.FillPath(&boxBrush, &boxPath);
+    Pen borderPen(boxBorder, 1.0f);
+    graphics.DrawPath(&borderPen, &boxPath);
+
+    if (checked) {
+        Pen checkPen(Color(255, 220, 235, 255), 2.0f);
+        checkPen.SetStartCap(LineCapRound);
+        checkPen.SetEndCap(LineCapRound);
+        graphics.DrawLine(&checkPen, boxX + 3.0f, boxY + 7.5f, boxX + 6.0f, boxY + 10.5f);
+        graphics.DrawLine(&checkPen, boxX + 6.0f, boxY + 10.5f, boxX + 11.0f, boxY + 4.0f);
+    }
+
+    FontFamily fontFamily(L"Segoe UI");
+    Font font(&fontFamily, 11, FontStyleRegular, UnitPoint);
+    SolidBrush textBrush(textColor);
+
+    RectF textRect(
+        boxX + boxSize + 6.0f,
+        0.0f,
+        static_cast<REAL>(rect.right - rect.left) - (boxX + boxSize + 6.0f),
+        static_cast<REAL>(rect.bottom - rect.top)
+    );
+    StringFormat stringFormat;
+    stringFormat.SetAlignment(StringAlignmentNear);
+    stringFormat.SetLineAlignment(StringAlignmentCenter);
+    graphics.DrawString(text.c_str(), -1, &font, textRect, &stringFormat, &textBrush);
+
+    if (focused) {
+        Pen focusPen(Color(180, 125, 125, 125), 1.0f);
+        graphics.DrawRectangle(&focusPen, 1.0f, 1.0f, static_cast<REAL>(rect.right - rect.left - 3), static_cast<REAL>(rect.bottom - rect.top - 3));
+    }
+
+    BitBlt(hdc, 0, 0, rect.right - rect.left, rect.bottom - rect.top, memDC, 0, 0, SRCCOPY);
+
+    SelectObject(memDC, oldBitmap);
+    DeleteObject(memBitmap);
+    DeleteDC(memDC);
+}
+
 void UiRenderer::DrawBackground(HDC hdc, const RECT& rect) {
     HBRUSH bgBrush = CreateSolidBrush(RGB(26, 26, 26));
     FillRect(hdc, &rect, bgBrush);
