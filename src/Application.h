@@ -51,6 +51,7 @@ private:
     void RedrawButtonDirect(HWND hBtn);
     static LRESULT CALLBACK TreeCanvasSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
     static LRESULT CALLBACK DepthEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
+    static LRESULT CALLBACK TextEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
     
     void GenerateTree();
     void GenerateTreeAsync();
@@ -71,6 +72,7 @@ private:
     void ShowStatusMessage(const std::wstring& message);
     void ShowPersistentStatusMessage(const std::wstring& message);
     void ShowHelpMenu();
+    void ShowTextContextMenu(HWND targetControl, LPARAM lParam);
     void ShowHotkeysWindow();
     void ShowAboutWindow();
     void CreateOrActivateInfoWindow(InfoWindowKind kind, HWND& targetHandle, const wchar_t* title, const std::wstring& bodyText);

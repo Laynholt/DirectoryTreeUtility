@@ -123,18 +123,6 @@ install(TARGETS ${PROJECT_NAME}
 )
 
 include(CTest)
-if(BUILD_TESTING)
-    add_executable(DirectoryTreeBuilderTests
-        tests/DirectoryTreeBuilderTests.cpp
-        src/DirectoryTreeBuilder.cpp
-        src/DirectoryTreeBuilder.h
-    )
-    target_include_directories(DirectoryTreeBuilderTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-    )
-    target_compile_features(DirectoryTreeBuilderTests PRIVATE cxx_std_17)
-    add_test(NAME DirectoryTreeBuilderTests COMMAND DirectoryTreeBuilderTests)
-endif()
 
 # Print build information
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")

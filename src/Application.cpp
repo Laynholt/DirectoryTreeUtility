@@ -28,7 +28,7 @@ using namespace Gdiplus;
 const wchar_t* WINDOW_CLASS = L"DirectoryTreeUtilityClass";
 const wchar_t* WINDOW_TITLE = L"Directory Tree Utility";
 const wchar_t* INFO_WINDOW_CLASS = L"DirectoryTreeUtilityInfoWindowClass";
-const wchar_t* APP_VERSION = L"1.3.0";
+const wchar_t* APP_VERSION = L"1.3.1";
 const UINT WM_ACTIVATE_INSTANCE = WM_USER + 200;
 
 enum ControlIDs {
@@ -43,7 +43,8 @@ enum ControlIDs {
     ID_INFO_CLOSE = 1009,
     ID_EXPAND_SYMLINKS_CHECK = 1010,
     ID_MENU_HELP_HOTKEYS = 2001,
-    ID_MENU_HELP_ABOUT = 2002
+    ID_MENU_HELP_ABOUT = 2002,
+    ID_MENU_CONTEXT_COPY = 2102
 };
 
 namespace {
@@ -61,13 +62,18 @@ struct InfoWindowState {
 HMODULE g_richEditModule = nullptr;
 constexpr size_t TREE_LARGE_CHARS_THRESHOLD = 400000;
 constexpr size_t TREE_SHRINK_FACTOR = 4;
+constexpr UINT_PTR TREE_CANVAS_SUBCLASS_ID = 1;
+constexpr UINT_PTR DEPTH_EDIT_SUBCLASS_ID = 2;
+constexpr UINT_PTR TEXT_CONTEXT_SUBCLASS_ID = 3;
 
 const wchar_t* GetHelpMenuItemText(UINT itemId) {
     switch (itemId) {
     case ID_MENU_HELP_HOTKEYS:
-        return L"Горячие клавиши...";
+        return L"Горячие клавиши";
     case ID_MENU_HELP_ABOUT:
-        return L"О программе...";
+        return L"О программе";
+    case ID_MENU_CONTEXT_COPY:
+        return L"Копировать";
     default:
         return nullptr;
     }
@@ -369,10 +375,11 @@ void Application::CreateControls() {
                                   24, 176, 740, 300, m_hWnd, reinterpret_cast<HMENU>(ID_TREE_CANVAS), m_hInstance, nullptr);
     
     // Subclass the tree canvas to handle mouse wheel
-    SetWindowSubclass(m_hTreeCanvas, TreeCanvasSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
+    SetWindowSubclass(m_hTreeCanvas, TreeCanvasSubclassProc, TREE_CANVAS_SUBCLASS_ID, reinterpret_cast<DWORD_PTR>(this));
     
     // Subclass the depth edit to handle minus key
-    SetWindowSubclass(m_hDepthEdit, DepthEditSubclassProc, 2, reinterpret_cast<DWORD_PTR>(this));
+    SetWindowSubclass(m_hDepthEdit, DepthEditSubclassProc, DEPTH_EDIT_SUBCLASS_ID, reinterpret_cast<DWORD_PTR>(this));
+    SetWindowSubclass(m_hPathEdit, TextEditSubclassProc, TEXT_CONTEXT_SUBCLASS_ID, reinterpret_cast<DWORD_PTR>(this));
 
     // Status label positioned inside status card
     m_hStatusLabel = CreateWindowEx(0, L"STATIC", L"Готово",
@@ -424,8 +431,8 @@ void Application::CreateMainMenu() {
         return;
     }
 
-    AppendMenu(m_hMainMenu, MF_OWNERDRAW, ID_MENU_HELP_HOTKEYS, L"Горячие клавиши...");
-    AppendMenu(m_hMainMenu, MF_OWNERDRAW, ID_MENU_HELP_ABOUT, L"О программе...");
+    AppendMenu(m_hMainMenu, MF_OWNERDRAW, ID_MENU_HELP_HOTKEYS, GetMenuItemText(ID_MENU_HELP_HOTKEYS, 0));
+    AppendMenu(m_hMainMenu, MF_OWNERDRAW, ID_MENU_HELP_ABOUT, GetMenuItemText(ID_MENU_HELP_ABOUT, 0));
 
     MENUINFO popupMenuInfo = {};
     popupMenuInfo.cbSize = sizeof(MENUINFO);
@@ -497,10 +504,13 @@ int Application::Run() {
 void Application::Shutdown() {
     // Remove subclassing
     if (m_hTreeCanvas) {
-        RemoveWindowSubclass(m_hTreeCanvas, TreeCanvasSubclassProc, 1);
+        RemoveWindowSubclass(m_hTreeCanvas, TreeCanvasSubclassProc, TREE_CANVAS_SUBCLASS_ID);
     }
     if (m_hDepthEdit) {
-        RemoveWindowSubclass(m_hDepthEdit, DepthEditSubclassProc, 2);
+        RemoveWindowSubclass(m_hDepthEdit, DepthEditSubclassProc, DEPTH_EDIT_SUBCLASS_ID);
+    }
+    if (m_hPathEdit) {
+        RemoveWindowSubclass(m_hPathEdit, TextEditSubclassProc, TEXT_CONTEXT_SUBCLASS_ID);
     }
     
     if (m_globalHotkeys) {
@@ -1221,9 +1231,9 @@ void Application::RecreateTreeCanvasControl() {
     }
     SendMessage(newCanvas, EM_SETUNDOLIMIT, 0, 0);
     SendMessage(newCanvas, EM_EMPTYUNDOBUFFER, 0, 0);
-    SetWindowSubclass(newCanvas, TreeCanvasSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
+    SetWindowSubclass(newCanvas, TreeCanvasSubclassProc, TREE_CANVAS_SUBCLASS_ID, reinterpret_cast<DWORD_PTR>(this));
 
-    RemoveWindowSubclass(previousCanvas, TreeCanvasSubclassProc, 1);
+    RemoveWindowSubclass(previousCanvas, TreeCanvasSubclassProc, TREE_CANVAS_SUBCLASS_ID);
     DestroyWindow(previousCanvas);
     m_hTreeCanvas = newCanvas;
 }
@@ -1567,6 +1577,116 @@ void Application::ShowHelpMenu() {
     PostMessage(m_hWnd, WM_NULL, 0, 0);
 }
 
+void Application::ShowTextContextMenu(HWND targetControl, LPARAM lParam) {
+    if (!targetControl || !IsWindow(targetControl)) {
+        return;
+    }
+
+    HMENU contextMenu = CreatePopupMenu();
+    if (!contextMenu) {
+        return;
+    }
+
+    AppendMenu(contextMenu, MF_OWNERDRAW, ID_MENU_CONTEXT_COPY, L"Копировать");
+
+    MENUINFO popupMenuInfo = {};
+    popupMenuInfo.cbSize = sizeof(MENUINFO);
+    popupMenuInfo.fMask = MIM_BACKGROUND;
+    popupMenuInfo.hbrBack = m_hEditBrush;
+    SetMenuInfo(contextMenu, &popupMenuInfo);
+
+    DWORD selectionStart = 0;
+    DWORD selectionEnd = 0;
+    SendMessage(targetControl, EM_GETSEL, reinterpret_cast<WPARAM>(&selectionStart), reinterpret_cast<LPARAM>(&selectionEnd));
+    const bool hasSelection = selectionEnd > selectionStart;
+    const bool hasText = GetWindowTextLength(targetControl) > 0;
+
+    EnableMenuItem(contextMenu, ID_MENU_CONTEXT_COPY, MF_BYCOMMAND | (hasText ? MF_ENABLED : MF_GRAYED));
+
+    POINT popupPoint = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+    if (popupPoint.x == -1 && popupPoint.y == -1) {
+        if (!GetCaretPos(&popupPoint)) {
+            RECT controlRect = {};
+            GetWindowRect(targetControl, &controlRect);
+            popupPoint.x = controlRect.left + 10;
+            popupPoint.y = controlRect.top + 10;
+        } else {
+            ClientToScreen(targetControl, &popupPoint);
+        }
+    }
+
+    HWND popupHostWindow = GetAncestor(targetControl, GA_ROOT);
+    if (!popupHostWindow || !IsWindow(popupHostWindow)) {
+        popupHostWindow = m_hWnd;
+    }
+    SetForegroundWindow(popupHostWindow);
+
+    // Owner-draw menu is rendered by the main window handlers (WM_MEASUREITEM/WM_DRAWITEM).
+    HWND popupOwner = m_hWnd;
+    const UINT selectedCommand = TrackPopupMenu(
+        contextMenu,
+        TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+        popupPoint.x,
+        popupPoint.y,
+        0,
+        popupOwner,
+        nullptr
+    );
+
+    switch (selectedCommand) {
+    case ID_MENU_CONTEXT_COPY:
+        if (hasText) {
+            const int textLength = GetWindowTextLength(targetControl);
+            std::wstring controlText(static_cast<size_t>(textLength) + 1, L'\0');
+            GetWindowText(targetControl, controlText.data(), textLength + 1);
+            controlText.resize(static_cast<size_t>(textLength));
+
+            std::wstring textToCopy = controlText;
+            if (hasSelection) {
+                size_t start = static_cast<size_t>(selectionStart);
+                size_t end = static_cast<size_t>(selectionEnd);
+                if (start > controlText.size()) {
+                    start = controlText.size();
+                }
+                if (end > controlText.size()) {
+                    end = controlText.size();
+                }
+                if (end < start) {
+                    end = start;
+                }
+                textToCopy = controlText.substr(start, end - start);
+            }
+
+            if (OpenClipboard(popupHostWindow)) {
+                EmptyClipboard();
+
+                const size_t bytes = (textToCopy.size() + 1) * sizeof(wchar_t);
+                HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+                if (hMem) {
+                    void* pMem = GlobalLock(hMem);
+                    if (pMem) {
+                        wcscpy_s(static_cast<wchar_t*>(pMem), textToCopy.size() + 1, textToCopy.c_str());
+                        GlobalUnlock(hMem);
+                        if (!SetClipboardData(CF_UNICODETEXT, hMem)) {
+                            GlobalFree(hMem);
+                        }
+                    } else {
+                        GlobalFree(hMem);
+                    }
+                }
+
+                CloseClipboard();
+            }
+        }
+        break;
+    default:
+        break;
+    }
+
+    DestroyMenu(contextMenu);
+    PostMessage(popupOwner, WM_NULL, 0, 0);
+}
+
 void Application::ShowHotkeysWindow() {
     const std::wstring hotkeysText =
         L"Глобальные горячие клавиши:\r\n"
@@ -1581,7 +1701,12 @@ void Application::ShowHotkeysWindow() {
         L"Shift+Backspace\t— очистка поля глубины\r\n"
         L"Стрелки\t— прокрутка дерева / изменение глубины\r\n";
 
-    CreateOrActivateInfoWindow(InfoWindowKind::Hotkeys, m_hHotkeysWindow, L"Горячие клавиши", hotkeysText);
+    CreateOrActivateInfoWindow(
+        InfoWindowKind::Hotkeys,
+        m_hHotkeysWindow,
+        GetMenuItemText(ID_MENU_HELP_HOTKEYS, 0),
+        hotkeysText
+    );
 }
 
 void Application::ShowAboutWindow() {
@@ -1595,11 +1720,26 @@ void Application::ShowAboutWindow() {
     aboutText += L"Утилита для построения символьного дерева директорий.\r\n";
     aboutText += L"Поддерживает экспорт в TXT / JSON / XML.";
 
-    CreateOrActivateInfoWindow(InfoWindowKind::About, m_hAboutWindow, L"О программе", aboutText);
+    CreateOrActivateInfoWindow(
+        InfoWindowKind::About,
+        m_hAboutWindow,
+        GetMenuItemText(ID_MENU_HELP_ABOUT, 0),
+        aboutText
+    );
 }
 
 void Application::CreateOrActivateInfoWindow(InfoWindowKind kind, HWND& targetHandle, const wchar_t* title, const std::wstring& bodyText) {
+    const wchar_t* effectiveTitle = title;
+    if (!effectiveTitle || effectiveTitle[0] == L'\0') {
+        const UINT menuItemId = (kind == InfoWindowKind::Hotkeys) ? ID_MENU_HELP_HOTKEYS : ID_MENU_HELP_ABOUT;
+        effectiveTitle = GetMenuItemText(menuItemId, 0);
+        if (!effectiveTitle) {
+            effectiveTitle = L"";
+        }
+    }
+
     if (targetHandle && IsWindow(targetHandle)) {
+        SetWindowText(targetHandle, effectiveTitle);
         ::ShowWindow(targetHandle, SW_SHOWNORMAL);
         SetForegroundWindow(targetHandle);
         return;
@@ -1629,7 +1769,7 @@ void Application::CreateOrActivateInfoWindow(InfoWindowKind kind, HWND& targetHa
     targetHandle = CreateWindowEx(
         WS_EX_DLGMODALFRAME,
         INFO_WINDOW_CLASS,
-        title,
+        effectiveTitle,
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
         x, y,
         windowWidth, windowHeight,
@@ -1645,6 +1785,7 @@ void Application::CreateOrActivateInfoWindow(InfoWindowKind kind, HWND& targetHa
         return;
     }
 
+    SetWindowText(targetHandle, effectiveTitle);
     ::ShowWindow(targetHandle, SW_SHOW);
     UpdateWindow(targetHandle);
 }
@@ -1701,6 +1842,15 @@ LRESULT CALLBACK Application::InfoWindowProc(HWND hWnd, UINT message, WPARAM wPa
             if (state->font) {
                 SendMessage(state->textControl, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), MAKELPARAM(FALSE, 0));
                 SendMessage(state->closeButton, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), MAKELPARAM(FALSE, 0));
+            }
+
+            if (state->owner && state->textControl) {
+                SetWindowSubclass(
+                    state->textControl,
+                    TextEditSubclassProc,
+                    TEXT_CONTEXT_SUBCLASS_ID,
+                    reinterpret_cast<DWORD_PTR>(state->owner)
+                );
             }
 
             if (state->useRichText && state->textControl) {
@@ -1899,6 +2049,13 @@ LRESULT CALLBACK Application::TreeCanvasSubclassProc(HWND hWnd, UINT uMsg, WPARA
     Application* pApp = reinterpret_cast<Application*>(dwRefData);
     
     switch (uMsg) {
+    case WM_CONTEXTMENU:
+        if (pApp) {
+            pApp->ShowTextContextMenu(hWnd, lParam);
+            return 0;
+        }
+        break;
+
     case WM_MOUSEWHEEL:
         {
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
@@ -1917,6 +2074,13 @@ LRESULT CALLBACK Application::DepthEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM
     Application* pApp = reinterpret_cast<Application*>(dwRefData);
     
     switch (uMsg) {
+    case WM_CONTEXTMENU:
+        if (pApp) {
+            pApp->ShowTextContextMenu(hWnd, lParam);
+            return 0;
+        }
+        break;
+
     case WM_CHAR:
         {
             wchar_t ch = static_cast<wchar_t>(wParam);
@@ -2063,6 +2227,19 @@ LRESULT CALLBACK Application::DepthEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM
         }
     }
     
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+LRESULT CALLBACK Application::TextEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    UNREFERENCED_PARAMETER(uIdSubclass);
+    UNREFERENCED_PARAMETER(wParam);
+    Application* pApp = reinterpret_cast<Application*>(dwRefData);
+
+    if (uMsg == WM_CONTEXTMENU && pApp) {
+        pApp->ShowTextContextMenu(hWnd, lParam);
+        return 0;
+    }
+
     return DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
