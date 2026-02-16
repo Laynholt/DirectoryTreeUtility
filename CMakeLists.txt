@@ -28,6 +28,7 @@ set(SOURCES
     src/UiRenderer.cpp
     src/TreeGenerationService.cpp
     src/FileSaveService.cpp
+    src/UpdateService.cpp
 )
 
 # Header files
@@ -40,6 +41,7 @@ set(HEADERS
     src/UiRenderer.h
     src/TreeGenerationService.h
     src/FileSaveService.h
+    src/UpdateService.h
     src/resource.h
 )
 
@@ -71,6 +73,7 @@ if(WIN32)
         gdi32
         comdlg32
         shlwapi
+        winhttp
     )
 endif()
 

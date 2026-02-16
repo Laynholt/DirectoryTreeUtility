@@ -12,6 +12,7 @@ class SystemTray;
 class GlobalHotkeys;
 class TreeGenerationService;
 class FileSaveService;
+class UpdateService;
 enum class TreeFormat;
 
 class Application {
@@ -36,10 +37,12 @@ private:
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK InfoWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK MessageWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
     void CreateControls();
     void CreateMainMenu();
     bool RegisterInfoWindowClass();
+    bool RegisterMessageWindowClass();
     void OnResize(int width, int height);
     void OnPaint();
     void OnCommand(int commandId);
@@ -72,6 +75,11 @@ private:
     void ShowStatusMessage(const std::wstring& message);
     void ShowPersistentStatusMessage(const std::wstring& message);
     void ShowHelpMenu();
+    void CheckForUpdates();
+    int ShowStyledMessageDialog(const wchar_t* title,
+                                const std::wstring& bodyText,
+                                const wchar_t* primaryButtonText,
+                                const wchar_t* secondaryButtonText = nullptr);
     void ShowTextContextMenu(HWND targetControl, LPARAM lParam);
     void ShowHotkeysWindow();
     void ShowAboutWindow();
@@ -101,6 +109,7 @@ private:
     std::unique_ptr<GlobalHotkeys> m_globalHotkeys;
     std::unique_ptr<TreeGenerationService> m_treeGenerationService;
     std::unique_ptr<FileSaveService> m_fileSaveService;
+    std::unique_ptr<UpdateService> m_updateService;
 
     std::wstring m_treeContent;
     size_t m_previousTreeSizeBeforeBuild;
