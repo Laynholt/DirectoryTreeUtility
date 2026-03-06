@@ -1,4 +1,5 @@
 #include "UpdateService.h"
+#include "AppInfo.h"
 
 #include <windows.h>
 #include <winhttp.h>
@@ -9,12 +10,6 @@
 #include <vector>
 
 namespace {
-constexpr wchar_t kGitHubHost[] = L"github.com";
-constexpr wchar_t kLatestReleasePath[] = L"/Laynholt/DirectoryTreeUtility/releases/latest";
-constexpr wchar_t kReleaseDownloadPrefix[] = L"/Laynholt/DirectoryTreeUtility/releases/download/";
-constexpr wchar_t kReleaseExeName[] = L"DirectoryTreeUtility.exe";
-constexpr wchar_t kUserAgent[] = L"DirectoryTreeUtility-Updater/1.0";
-
 class WinHttpHandle {
 public:
     explicit WinHttpHandle(HINTERNET handle = nullptr)
@@ -235,10 +230,10 @@ bool UpdateService::DownloadReleaseExecutable(const std::wstring& tag, const std
         return false;
     }
 
-    const std::wstring requestPath = std::wstring(kReleaseDownloadPrefix) + tag + L"/" + kReleaseExeName;
+    const std::wstring requestPath = std::wstring(AppInfo::kGitHubRepoPath) + L"/releases/download/" + tag + L"/" + AppInfo::kExecutableName;
 
     WinHttpHandle session(WinHttpOpen(
-        kUserAgent,
+        AppInfo::kUpdateUserAgent,
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS,
@@ -249,7 +244,7 @@ bool UpdateService::DownloadReleaseExecutable(const std::wstring& tag, const std
         return false;
     }
 
-    WinHttpHandle connection(WinHttpConnect(session.get(), kGitHubHost, INTERNET_DEFAULT_HTTPS_PORT, 0));
+    WinHttpHandle connection(WinHttpConnect(session.get(), AppInfo::kGitHubHost, INTERNET_DEFAULT_HTTPS_PORT, 0));
     if (!connection) {
         errorMessage = L"Не удалось подключиться к GitHub: " + FormatWin32Error(GetLastError());
         return false;
@@ -411,7 +406,7 @@ bool UpdateService::ResolveLatestReleaseTag(std::wstring& latestTag, std::wstrin
     latestTag.clear();
 
     WinHttpHandle session(WinHttpOpen(
-        kUserAgent,
+        AppInfo::kUpdateUserAgent,
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS,
@@ -422,16 +417,17 @@ bool UpdateService::ResolveLatestReleaseTag(std::wstring& latestTag, std::wstrin
         return false;
     }
 
-    WinHttpHandle connection(WinHttpConnect(session.get(), kGitHubHost, INTERNET_DEFAULT_HTTPS_PORT, 0));
+    WinHttpHandle connection(WinHttpConnect(session.get(), AppInfo::kGitHubHost, INTERNET_DEFAULT_HTTPS_PORT, 0));
     if (!connection) {
         errorMessage = L"Не удалось подключиться к GitHub: " + FormatWin32Error(GetLastError());
         return false;
     }
 
+    const std::wstring latestReleasePath = std::wstring(AppInfo::kGitHubRepoPath) + L"/releases/latest";
     WinHttpHandle request(WinHttpOpenRequest(
         connection.get(),
         L"GET",
-        kLatestReleasePath,
+        latestReleasePath.c_str(),
         nullptr,
         WINHTTP_NO_REFERER,
         WINHTTP_DEFAULT_ACCEPT_TYPES,

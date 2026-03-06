@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(DirectoryTreeUtility
-    VERSION 1.0.0
+    VERSION 1.4.0
     DESCRIPTION "Directory Tree Utility for Windows"
     LANGUAGES CXX
 )
@@ -19,35 +19,44 @@ endif()
 
 # Source files
 set(SOURCES
-    src/main.cpp
-    src/Application.cpp
-    src/DirectoryTreeBuilder.cpp
-    src/FileExplorerIntegration.cpp
-    src/SystemTray.cpp
-    src/GlobalHotkeys.cpp
-    src/UiRenderer.cpp
-    src/TreeGenerationService.cpp
-    src/FileSaveService.cpp
-    src/UpdateService.cpp
+    src/app/main.cpp
+    src/app/Application.cpp
+    src/app/ApplicationUi.cpp
+    src/app/ApplicationWorkflows.cpp
+    src/app/ApplicationDialogs.cpp
+    src/platform/win32/DarkMode.cpp
+    src/platform/win32/FileExplorerIntegration.cpp
+    src/platform/win32/SystemTray.cpp
+    src/platform/win32/GlobalHotkeys.cpp
+    src/rendering/UiRenderer.cpp
+    src/services/DirectoryTreeBuilder.cpp
+    src/services/TreeGenerationService.cpp
+    src/services/FileSaveService.cpp
+    src/services/UpdateService.cpp
 )
 
 # Header files
 set(HEADERS
-    src/Application.h
-    src/DirectoryTreeBuilder.h
-    src/FileExplorerIntegration.h
-    src/SystemTray.h
-    src/GlobalHotkeys.h
-    src/UiRenderer.h
-    src/TreeGenerationService.h
-    src/FileSaveService.h
-    src/UpdateService.h
-    src/resource.h
+    src/app/Application.h
+    src/app/ApplicationInternal.h
+    src/platform/win32/DarkMode.h
+    src/platform/win32/IatHook.h
+    src/platform/win32/FileExplorerIntegration.h
+    src/platform/win32/SystemTray.h
+    src/platform/win32/GlobalHotkeys.h
+    src/rendering/UiRenderer.h
+    src/services/DirectoryTreeBuilder.h
+    src/services/TreeGenerationService.h
+    src/services/FileSaveService.h
+    src/services/UpdateService.h
+    src/shared/AppInfo.h
+    src/shared/AppTheme.h
+    src/resources/resource.h
 )
 
 # Resource files
 set(RESOURCES
-    src/resource.rc
+    src/resources/resource.rc
 )
 
 # Enable resource compilation
@@ -73,6 +82,7 @@ if(WIN32)
         gdi32
         comdlg32
         shlwapi
+        uxtheme
         winhttp
     )
 endif()
@@ -105,6 +115,12 @@ endif()
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/win32
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rendering
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/resources
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/services
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/shared
 )
 
 # Set output directories

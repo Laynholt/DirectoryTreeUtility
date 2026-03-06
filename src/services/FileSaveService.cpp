@@ -29,14 +29,22 @@ void FileSaveService::SaveTreeAsync(const std::wstring& fileName, const std::wst
     m_worker = std::thread([this, fileName, rootPath, depth, format, expandSymlinks, onCompleted = std::move(onCompleted), onError = std::move(onError)]() mutable {
         try {
             DirectoryTreeBuilder builder;
-            std::wstring content = builder.BuildTree(rootPath, depth, format, expandSymlinks);
+            BuildTreeResult buildResult = builder.BuildTree(rootPath, depth, format, expandSymlinks);
             if (m_cancelRequested.load()) {
                 m_running.store(false);
                 return;
             }
 
+            if (!buildResult.success) {
+                if (onError) {
+                    onError(std::move(buildResult.errorMessage));
+                }
+                m_running.store(false);
+                return;
+            }
+
             std::wstring errorMessage;
-            if (WriteUtf8File(fileName, content, &errorMessage)) {
+            if (WriteUtf8File(fileName, buildResult.content, &errorMessage)) {
                 if (!m_cancelRequested.load() && onCompleted) {
                     onCompleted();
                 }
@@ -66,10 +74,6 @@ void FileSaveService::Cancel() {
     }
 
     m_running.store(false);
-}
-
-bool FileSaveService::IsRunning() const {
-    return m_running.load();
 }
 
 bool FileSaveService::WriteUtf8File(const std::wstring& fileName, const std::wstring& content, std::wstring* errorMessage) {

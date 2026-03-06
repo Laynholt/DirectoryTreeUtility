@@ -1,23 +1,20 @@
 #include "Application.h"
+#include "AppInfo.h"
+
 #include <windows.h>
 
-const wchar_t* MUTEX_NAME = L"DirectoryTreeUtility_SingleInstance";
-const wchar_t* WINDOW_CLASS_NAME = L"DirectoryTreeUtilityClass";
 const UINT WM_ACTIVATE_INSTANCE = WM_USER + 200;
 
 BOOL CALLBACK EnumWindowsProc(HWND hWnd, LPARAM lParam) {
     UNREFERENCED_PARAMETER(lParam);
     wchar_t className[256];
     if (GetClassName(hWnd, className, 256) > 0) {
-        if (wcscmp(className, WINDOW_CLASS_NAME) == 0) {
-            // Found existing window - send message to show it properly
-            // This will use Application::ShowWindow() method which handles m_isMinimized flag
+        if (wcscmp(className, AppInfo::kWindowClass) == 0) {
             PostMessage(hWnd, WM_ACTIVATE_INSTANCE, 0, 0);
-            
-            return FALSE; // Stop enumeration
+            return FALSE;
         }
     }
-    return TRUE; // Continue enumeration
+    return TRUE;
 }
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
@@ -28,10 +25,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(lpCmdLine);
     UNREFERENCED_PARAMETER(nCmdShow);
 
-    // Check if another instance is already running
-    HANDLE hMutex = CreateMutex(nullptr, FALSE, MUTEX_NAME);
+    HANDLE hMutex = CreateMutex(nullptr, FALSE, AppInfo::kMutexName);
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        // Another instance is running - find and activate its window
         EnumWindows(EnumWindowsProc, 0);
         CloseHandle(hMutex);
         return 0;
@@ -44,10 +39,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         return -1;
     }
 
-    // Show the window after successful initialization
     app.ShowWindow(true);
-    
-    // Force update of the non-client area to ensure title bar buttons appear
+
     HWND hWnd = app.GetMainWindow();
     SetWindowPos(hWnd, nullptr, 0, 0, 0, 0, 
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
@@ -56,7 +49,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     int result = app.Run();
     app.Shutdown();
     
-    // Release the mutex
     CloseHandle(hMutex);
     return result;
 }

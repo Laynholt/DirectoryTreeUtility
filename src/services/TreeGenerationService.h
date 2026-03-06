@@ -16,7 +16,6 @@ public:
 
     void Start(const std::wstring& rootPath, int depth, bool expandSymlinks, CompletionCallback onCompleted, ErrorCallback onError, ProgressCallback onProgress = {});
     void Cancel();
-    bool IsRunning() const;
 
 private:
     std::thread m_worker;

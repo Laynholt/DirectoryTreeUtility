@@ -14,18 +14,18 @@ DirectoryTreeBuilder::DirectoryTreeBuilder() {
 DirectoryTreeBuilder::~DirectoryTreeBuilder() {
 }
 
-std::wstring DirectoryTreeBuilder::BuildTree(const std::wstring& rootPath, int maxDepth, TreeFormat format,
-                                                  bool expandSymlinks,
-                                                  std::function<bool()> shouldCancel,
-                                                  std::function<void(const std::wstring&)> progressCallback) {
+BuildTreeResult DirectoryTreeBuilder::BuildTree(const std::wstring& rootPath, int maxDepth, TreeFormat format,
+                                                bool expandSymlinks,
+                                                std::function<bool()> shouldCancel,
+                                                std::function<void(const std::wstring&)> progressCallback) {
     try {
         std::filesystem::path path(rootPath);
         if (!std::filesystem::exists(path)) {
-            return L"Путь не существует: " + rootPath;
+            return {false, L"", L"Путь не существует: " + rootPath};
         }
 
         if (shouldCancel && shouldCancel()) {
-            return L"Операция отменена";
+            return {false, L"", L"Операция отменена"};
         }
 
         if (format == TreeFormat::TEXT) {
@@ -52,13 +52,13 @@ std::wstring DirectoryTreeBuilder::BuildTree(const std::wstring& rootPath, int m
             std::filesystem::directory_options options = std::filesystem::directory_options::skip_permission_denied;
             std::filesystem::directory_iterator iterator(path, options, ec);
             if (ec) {
-                return result;
+                return {false, L"", L"Не удалось открыть каталог: " + rootPath};
             }
 
             std::vector<SortableEntry> entries;
             for (const auto& entry : iterator) {
                 if (shouldCancel && shouldCancel()) {
-                    return L"Операция отменена";
+                    return {false, L"", L"Операция отменена"};
                 }
 
                 std::error_code typeEc;
@@ -80,18 +80,18 @@ std::wstring DirectoryTreeBuilder::BuildTree(const std::wstring& rootPath, int m
 
             for (size_t i = 0; i < entries.size(); ++i) {
                 if (shouldCancel && shouldCancel()) {
-                    return L"Операция отменена";
+                    return {false, L"", L"Операция отменена"};
                 }
 
                 const bool isLast = (i == entries.size() - 1);
                 if (!RenderTreeFromPath(entries[i].entry.path(), L"", isLast, 1, maxDepth,
                                         expandSymlinks,
                                         result, shouldCancel, progressCallback, processedCount, visitedPaths)) {
-                    return L"Операция отменена";
+                    return {false, L"", L"Операция отменена"};
                 }
             }
 
-            return result;
+            return {true, std::move(result), L""};
         }
 
         int processedCount = 0;
@@ -102,16 +102,16 @@ std::wstring DirectoryTreeBuilder::BuildTree(const std::wstring& rootPath, int m
         );
 
         if (shouldCancel && shouldCancel()) {
-            return L"Операция отменена";
+            return {false, L"", L"Операция отменена"};
         }
 
         if (format == TreeFormat::JSON) {
-            return RenderTreeAsJson(root);
+            return {true, RenderTreeAsJson(root), L""};
         }
-        return RenderTreeAsXml(root);
+        return {true, RenderTreeAsXml(root), L""};
     }
     catch (const std::exception&) {
-        return L"Ошибка при построении дерева директорий";
+        return {false, L"", L"Ошибка при построении дерева директорий"};
     }
 }
 
@@ -352,12 +352,6 @@ TreeNode DirectoryTreeBuilder::BuildNodeTree(const std::filesystem::path& path, 
     visitedPaths.erase(pathKey);
     
     return node;
-}
-
-std::wstring DirectoryTreeBuilder::RenderTree(const TreeNode& node, const std::wstring& prefix, bool isLast) {
-    std::wstring result;
-    RenderTreeToBuffer(node, prefix, isLast, result);
-    return result;
 }
 
 void DirectoryTreeBuilder::RenderTreeToBuffer(const TreeNode& node, const std::wstring& prefix, bool isLast, std::wstring& out) {

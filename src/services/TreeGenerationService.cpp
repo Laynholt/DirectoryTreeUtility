@@ -23,7 +23,7 @@ void TreeGenerationService::Start(const std::wstring& rootPath, int depth, bool 
     m_worker = std::thread([this, rootPath, depth, expandSymlinks, onCompleted = std::move(onCompleted), onError = std::move(onError), onProgress = std::move(onProgress)]() mutable {
         try {
             DirectoryTreeBuilder builder;
-            std::wstring result = builder.BuildTree(
+            BuildTreeResult result = builder.BuildTree(
                 rootPath,
                 depth,
                 TreeFormat::TEXT,
@@ -32,8 +32,17 @@ void TreeGenerationService::Start(const std::wstring& rootPath, int depth, bool 
                 onProgress
             );
 
-            if (!m_cancelRequested.load() && onCompleted) {
-                onCompleted(std::move(result));
+            if (m_cancelRequested.load()) {
+                m_running.store(false);
+                return;
+            }
+
+            if (result.success) {
+                if (onCompleted) {
+                    onCompleted(std::move(result.content));
+                }
+            } else if (onError) {
+                onError(std::move(result.errorMessage));
             }
         }
         catch (const std::exception& e) {
@@ -56,8 +65,4 @@ void TreeGenerationService::Cancel() {
     }
 
     m_running.store(false);
-}
-
-bool TreeGenerationService::IsRunning() const {
-    return m_running.load();
 }

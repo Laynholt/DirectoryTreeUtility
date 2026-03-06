@@ -79,17 +79,6 @@ std::wstring FileExplorerIntegration::GetActiveExplorerPath() {
     return result;
 }
 
-bool FileExplorerIntegration::IsExplorerWindowActive() {
-    HWND hWnd = GetForegroundWindow();
-    if (!hWnd) return false;
-    
-    wchar_t className[256];
-    GetClassName(hWnd, className, 256);
-    
-    return wcscmp(className, L"CabinetWClass") == 0 || 
-           wcscmp(className, L"ExploreWClass") == 0;
-}
-
 IShellWindows* FileExplorerIntegration::GetShellWindows() {
     IShellWindows* pShellWindows = nullptr;
     HRESULT hr = CoCreateInstance(CLSID_ShellWindows, nullptr, CLSCTX_ALL, 

@@ -39,4 +39,6 @@ private:
         ID_SEPARATOR = 1001,
         ID_EXIT = 1002
     };
+
+    HFONT m_hMenuFont;
 };

@@ -7,7 +7,6 @@
 class FileExplorerIntegration {
 public:
     static std::wstring GetActiveExplorerPath();
-    static bool IsExplorerWindowActive();
     
 private:
     static IShellWindows* GetShellWindows();

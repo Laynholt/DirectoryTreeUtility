@@ -1,4 +1,5 @@
 #include "UiRenderer.h"
+#include "AppTheme.h"
 
 #include <gdiplus.h>
 
@@ -17,19 +18,19 @@ void UiRenderer::DrawCustomButton(HDC hdc, HWND button, const std::wstring& text
     graphics.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
     graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
 
-    graphics.Clear(Color(255, 45, 45, 45));
+    graphics.Clear(AppTheme::ToColor(AppTheme::kCardBackground));
 
-    Color baseColor = Color(255, 68, 68, 68);
-    Color hoverColor = Color(255, 78, 78, 78);
-    Color pressedColor = Color(255, 58, 58, 58);
+    Color baseColor = AppTheme::ToColor(AppTheme::kCardHover);
+    Color hoverColor = AppTheme::ToColor(RGB(78, 78, 78));
+    Color pressedColor = AppTheme::ToColor(AppTheme::kCardPressed);
 
-    Color baseBorder = Color(255, 85, 85, 85);
-    Color hoverBorder = Color(255, 100, 100, 100);
-    Color pressedBorder = Color(255, 80, 80, 80);
+    Color baseBorder = AppTheme::ToColor(AppTheme::kCardBorderStrong);
+    Color hoverBorder = AppTheme::ToColor(AppTheme::kCardBorderHover);
+    Color pressedBorder = AppTheme::ToColor(RGB(80, 80, 80));
 
-    Color baseText = Color(255, 230, 230, 230);
-    Color hoverText = Color(255, 255, 255, 255);
-    Color pressedText = Color(255, 220, 220, 220);
+    Color baseText = AppTheme::ToColor(AppTheme::kTextMuted);
+    Color hoverText = AppTheme::ToColor(AppTheme::kTextPrimary);
+    Color pressedText = AppTheme::ToColor(RGB(220, 220, 220));
 
     Color bgColor;
     Color borderColor;
@@ -114,11 +115,11 @@ void UiRenderer::DrawCustomCheckbox(HDC hdc, HWND control, const std::wstring& t
     graphics.SetSmoothingMode(SmoothingModeHighQuality);
     graphics.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
     graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
-    graphics.Clear(Color(255, 45, 45, 45));
+    graphics.Clear(AppTheme::ToColor(AppTheme::kCardBackground));
 
-    const Color textColor = enabled ? Color(255, 235, 235, 235) : Color(255, 145, 145, 145);
+    const Color textColor = enabled ? AppTheme::ToColor(RGB(235, 235, 235)) : AppTheme::ToColor(RGB(145, 145, 145));
     const Color boxBg = pressed ? Color(255, 35, 35, 35) : (hot ? Color(255, 50, 50, 50) : Color(255, 40, 40, 40));
-    const Color boxBorder = checked ? Color(255, 135, 170, 220) : Color(255, 92, 92, 92);
+    const Color boxBorder = checked ? AppTheme::ToColor(AppTheme::kCheckboxAccent) : Color(255, 92, 92, 92);
 
     const REAL boxSize = 14.0f;
     const REAL boxX = 6.0f;
@@ -173,7 +174,7 @@ void UiRenderer::DrawCustomCheckbox(HDC hdc, HWND control, const std::wstring& t
 }
 
 void UiRenderer::DrawBackground(HDC hdc, const RECT& rect) {
-    HBRUSH bgBrush = CreateSolidBrush(RGB(26, 26, 26));
+    HBRUSH bgBrush = CreateSolidBrush(AppTheme::kBackground);
     FillRect(hdc, &rect, bgBrush);
     DeleteObject(bgBrush);
 }
@@ -183,8 +184,8 @@ void UiRenderer::DrawCard(HDC hdc, const RECT& rect, const std::wstring& title) 
     graphics.SetSmoothingMode(SmoothingModeHighQuality);
     graphics.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
 
-    Color cardBg(255, 45, 45, 45);
-    Color borderColor(255, 64, 64, 64);
+    Color cardBg = AppTheme::ToColor(AppTheme::kCardBackground);
+    Color borderColor = AppTheme::ToColor(AppTheme::kCardBorder);
 
     GraphicsPath path;
     int radius = 8;
@@ -214,7 +215,7 @@ void UiRenderer::DrawCard(HDC hdc, const RECT& rect, const std::wstring& title) 
     if (!title.empty()) {
         FontFamily fontFamily(L"Segoe UI");
         Font font(&fontFamily, 12, FontStyleBold, UnitPoint);
-        SolidBrush textBrush(Color(255, 255, 255, 255));
+        SolidBrush textBrush(AppTheme::ToColor(AppTheme::kTextPrimary));
 
         RectF titleRect(
             static_cast<REAL>(rect.left) + 16,
@@ -245,7 +246,7 @@ void UiRenderer::DrawEditBorder(HWND parentWindow, HWND editControl) {
         return;
     }
 
-    HPEN hPen = CreatePen(PS_SOLID, 1, RGB(64, 64, 64));
+    HPEN hPen = CreatePen(PS_SOLID, 1, AppTheme::kCardBorder);
     HPEN hOldPen = static_cast<HPEN>(SelectObject(hdc, hPen));
 
     MoveToEx(hdc, rect.left - 1, rect.top - 1, nullptr);

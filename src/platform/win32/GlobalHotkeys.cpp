@@ -1,7 +1,6 @@
 #include "GlobalHotkeys.h"
 #include "Application.h"
-
-const wchar_t* HOTKEY_WINDOW_CLASS = L"DirectoryTreeUtilityHotkeyClass";
+#include "AppInfo.h"
 
 GlobalHotkeys::GlobalHotkeys(Application* app)
     : m_application(app)
@@ -24,7 +23,7 @@ bool GlobalHotkeys::Initialize() {
     wcex.hCursor = nullptr;
     wcex.hbrBackground = nullptr;
     wcex.lpszMenuName = nullptr;
-    wcex.lpszClassName = HOTKEY_WINDOW_CLASS;
+    wcex.lpszClassName = AppInfo::kHotkeyWindowClass;
     wcex.hIconSm = nullptr;
 
     if (!RegisterClassEx(&wcex)) {
@@ -35,8 +34,8 @@ bool GlobalHotkeys::Initialize() {
     }
 
     m_hHotkeyWnd = CreateWindow(
-        HOTKEY_WINDOW_CLASS,
-        L"DirectoryTreeUtilityHotkey",
+        AppInfo::kHotkeyWindowClass,
+        AppInfo::kHotkeyWindowName,
         0, 0, 0, 0, 0,
         HWND_MESSAGE,
         nullptr,

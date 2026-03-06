@@ -24,15 +24,21 @@ struct TreeNode {
         : name(std::move(nodeName)), isDirectory(isDir) {}
 };
 
+struct BuildTreeResult {
+    bool success;
+    std::wstring content;
+    std::wstring errorMessage;
+};
+
 class DirectoryTreeBuilder {
 public:
     DirectoryTreeBuilder();
     ~DirectoryTreeBuilder();
 
-    std::wstring BuildTree(const std::wstring& rootPath, int maxDepth, TreeFormat format,
-                               bool expandSymlinks = false,
-                               std::function<bool()> shouldCancel = nullptr,
-                               std::function<void(const std::wstring&)> progressCallback = nullptr);
+    BuildTreeResult BuildTree(const std::wstring& rootPath, int maxDepth, TreeFormat format,
+                              bool expandSymlinks = false,
+                              std::function<bool()> shouldCancel = nullptr,
+                              std::function<void(const std::wstring&)> progressCallback = nullptr);
 
 private:
     bool RenderTreeFromPath(const std::filesystem::path& path,
@@ -54,7 +60,6 @@ private:
                                  int& processedCount,
                                  std::unordered_set<std::wstring>& visitedPaths);
     void RenderTreeToBuffer(const TreeNode& node, const std::wstring& prefix, bool isLast, std::wstring& out);
-    std::wstring RenderTree(const TreeNode& root, const std::wstring& prefix = L"", bool isLast = true);
     std::wstring RenderTreeAsJson(const TreeNode& root, int indent = 0);
     std::wstring RenderTreeAsXml(const TreeNode& root, int indent = 0);
     

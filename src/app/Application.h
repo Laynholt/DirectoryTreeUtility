@@ -23,6 +23,7 @@ public:
     bool Initialize(HINSTANCE hInstance);
     int Run();
     void Shutdown();
+    void RequestExit();
 
     HWND GetMainWindow() const { return m_hWnd; }
     void ShowWindow(bool show = true);
@@ -71,6 +72,7 @@ private:
     void UpdateCurrentPath();
     void CompactTreeBuffersForNextBuild(int nextDepth);
     void RecreateTreeCanvasControl();
+    void UpdateTreeCanvasScrollBarVisibility();
     void TrimProcessMemoryUsage();
     void ShowStatusMessage(const std::wstring& message);
     void ShowPersistentStatusMessage(const std::wstring& message);
@@ -89,6 +91,7 @@ private:
     std::wstring GetCurrentWorkingPath();
     void HandleMouseWheelScroll(int delta);
     bool IsExpandSymlinksEnabled() const;
+    bool ShouldCloseToTray() const;
 
     HINSTANCE m_hInstance;
     HWND m_hWnd;
@@ -115,10 +118,10 @@ private:
     size_t m_previousTreeSizeBeforeBuild;
     size_t m_previousTreeCapacityBeforeBuild;
     bool m_expandSymlinks;
-    int m_currentDepth;
     bool m_isMinimized;
     bool m_isDefaultDepthValue;
     bool m_hasGeneratedTree;  // Flag to track if tree was generated
+    bool m_forceCloseRequested;
     std::wstring m_lastKnownPath;
     
     // Multithreading support
